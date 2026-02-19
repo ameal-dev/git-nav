@@ -80,6 +80,69 @@ format_branch_name() {
   fi
 }
 
+# Fuzzy-search branches by query, show numbered list, echo selected branch name
+# to stdout. All UI (menu, prompts) goes to stderr so callers can use $().
+# Auto-selects silently when only one branch matches.
+pick_branch() {
+  local query="$1"
+
+  local fuzzy_pattern=""
+  for (( i=0; i<${#query}; i++ )); do
+    local char="${query:$i:1}"
+    char=$(printf '%s' "$char" | sed 's/[][\\.^$*+?{}()|]/\\&/g')
+    fuzzy_pattern+="${char}.*"
+  done
+  fuzzy_pattern="${fuzzy_pattern%.\*}"
+
+  local branches
+  branches=$(git branch --all --format='%(refname:short)' | \
+    sed 's|^origin/||' | sort -u | \
+    grep -iE "$fuzzy_pattern" 2>/dev/null || true)
+
+  if [[ -z "$branches" ]]; then
+    echo -e "${COLOR_YELLOW}No branches matching '${query}'${COLOR_RESET}" >&2
+    return 1
+  fi
+
+  local count
+  count=$(echo "$branches" | wc -l | tr -d ' ')
+
+  if [[ "$count" -eq 1 ]]; then
+    echo -e "${COLOR_CYAN}Found: ${COLOR_RESET}${branches}" >&2
+    echo "$branches"
+    return 0
+  fi
+
+  local current
+  current=$(current_branch)
+
+  local i=1
+  while IFS= read -r branch; do
+    local formatted
+    formatted=$(format_branch_name "$branch" "$current")
+    printf "  ${COLOR_YELLOW}%2d${COLOR_RESET}  %b\n" "$i" "$formatted" >&2
+    ((i++))
+  done <<< "$branches"
+
+  echo "" >&2
+  echo -ne "${COLOR_DIM}Select branch #: ${COLOR_RESET}" >&2
+  read -r choice
+
+  if [[ "$choice" =~ ^[0-9]+$ ]]; then
+    local target
+    target=$(echo "$branches" | sed -n "${choice}p")
+    if [[ -n "$target" ]]; then
+      echo "$target"
+    else
+      echo -e "${COLOR_RED}Invalid selection.${COLOR_RESET}" >&2
+      return 1
+    fi
+  else
+    echo -e "${COLOR_DIM}No selection made.${COLOR_RESET}" >&2
+    return 1
+  fi
+}
+
 # ── Commands ────────────────────────────────────────────────
 
 cmd_search() {
@@ -312,6 +375,148 @@ cmd_type() {
   cmd_list "$type/"
 }
 
+cmd_copy() {
+  local ticket_only=false
+  local query=""
+
+  for arg in "$@"; do
+    if [[ "$arg" == "--ticket" ]]; then
+      ticket_only=true
+    else
+      query="$arg"
+    fi
+  done
+
+  local branch
+  if [[ -z "$query" ]]; then
+    branch=$(current_branch)
+  else
+    branch=$(pick_branch "$query") || return 1
+  fi
+
+  local to_copy="$branch"
+  if $ticket_only; then
+    if [[ "$branch" =~ ([A-Z]+-[0-9]+) ]]; then
+      to_copy="${BASH_REMATCH[1]}"
+    else
+      echo -e "${COLOR_YELLOW}No ticket ID found in branch: ${branch}${COLOR_RESET}"
+      return 1
+    fi
+  fi
+
+  echo -n "$to_copy" | pbcopy
+  echo -e "${COLOR_GREEN}✓ Copied to clipboard:${COLOR_RESET} ${COLOR_BOLD}${to_copy}${COLOR_RESET}"
+}
+
+cmd_merge() {
+  local git_args=()
+  local query=""
+
+  for arg in "$@"; do
+    if [[ "$arg" == --* ]]; then
+      git_args+=("$arg")
+    else
+      query="$arg"
+    fi
+  done
+
+  if [[ -z "$query" ]]; then
+    echo -e "${COLOR_RED}Usage: git-nav merge [--squash|--no-ff] <query>${COLOR_RESET}"
+    return 1
+  fi
+
+  local branch
+  branch=$(pick_branch "$query") || return 1
+
+  echo -e "${COLOR_CYAN}Merging ${COLOR_BOLD}${branch}${COLOR_RESET}${COLOR_CYAN} into $(current_branch)...${COLOR_RESET}"
+  git merge "${git_args[@]}" "$branch"
+}
+
+cmd_rebase() {
+  local query="${1:-}"
+  if [[ -z "$query" ]]; then
+    echo -e "${COLOR_RED}Usage: git-nav rebase <query>${COLOR_RESET}"
+    return 1
+  fi
+
+  local branch
+  branch=$(pick_branch "$query") || return 1
+
+  echo -e "${COLOR_CYAN}Rebasing onto ${COLOR_BOLD}${branch}${COLOR_RESET}${COLOR_CYAN}...${COLOR_RESET}"
+  git rebase "$branch"
+}
+
+cmd_diff() {
+  local git_args=()
+  local query=""
+
+  for arg in "$@"; do
+    if [[ "$arg" == --* ]]; then
+      git_args+=("$arg")
+    else
+      query="$arg"
+    fi
+  done
+
+  if [[ -z "$query" ]]; then
+    echo -e "${COLOR_RED}Usage: git-nav diff [--stat] <query>${COLOR_RESET}"
+    return 1
+  fi
+
+  local branch
+  branch=$(pick_branch "$query") || return 1
+
+  git diff "${git_args[@]}" "$branch"
+}
+
+cmd_log() {
+  local query="${1:-}"
+  if [[ -z "$query" ]]; then
+    echo -e "${COLOR_RED}Usage: git-nav log <query>${COLOR_RESET}"
+    return 1
+  fi
+
+  local branch
+  branch=$(pick_branch "$query") || return 1
+
+  git log "$branch"
+}
+
+cmd_delete() {
+  local force=false
+  local query=""
+
+  for arg in "$@"; do
+    if [[ "$arg" == "--force" || "$arg" == "-f" ]]; then
+      force=true
+    else
+      query="$arg"
+    fi
+  done
+
+  if [[ -z "$query" ]]; then
+    echo -e "${COLOR_RED}Usage: git-nav delete [--force] <query>${COLOR_RESET}"
+    return 1
+  fi
+
+  local branch
+  branch=$(pick_branch "$query") || return 1
+
+  echo -ne "${COLOR_YELLOW}Delete branch '${COLOR_BOLD}${branch}${COLOR_RESET}${COLOR_YELLOW}'? [y/N]: ${COLOR_RESET}"
+  read -r confirm
+
+  if [[ "$confirm" =~ ^[yY]$ ]]; then
+    if $force; then
+      git branch -D "$branch"
+    else
+      git branch -d "$branch"
+    fi
+    echo -e "${COLOR_GREEN}✓ Deleted branch ${COLOR_BOLD}${branch}${COLOR_RESET}"
+  else
+    echo -e "${COLOR_DIM}Aborted.${COLOR_RESET}"
+  fi
+}
+
 cmd_interactive() {
   local current
   current=$(current_branch)
@@ -352,20 +557,34 @@ cmd_interactive() {
 cmd_help() {
   echo -e "${COLOR_BOLD}🔀 git-nav — Smart Git Branch Navigator${COLOR_RESET}"
   echo ""
-  echo -e "${COLOR_BOLD}USAGE:${COLOR_RESET}"
-  echo -e "  ${COLOR_CYAN}git-nav${COLOR_RESET}                     Interactive mode"
-  echo -e "  ${COLOR_CYAN}git-nav search${COLOR_RESET} <query>      Fuzzy search branches"
-  echo -e "  ${COLOR_CYAN}git-nav list${COLOR_RESET} [filter]       List branches (sorted by recent commit)"
-  echo -e "  ${COLOR_CYAN}git-nav recent${COLOR_RESET}              Show recently visited branches"
-  echo -e "  ${COLOR_CYAN}git-nav back${COLOR_RESET} [n]            Switch to nth previous branch (default: 1)"
-  echo -e "  ${COLOR_CYAN}git-nav ticket${COLOR_RESET} <ID>         Find branch by ticket (e.g. AVEN-43)"
-  echo -e "  ${COLOR_CYAN}git-nav type${COLOR_RESET} [type]         Browse by prefix (feature/bugfix/...)"
+  echo -e "${COLOR_BOLD}NAVIGATION:${COLOR_RESET}"
+  echo -e "  ${COLOR_CYAN}git-nav${COLOR_RESET}                          Interactive mode"
+  echo -e "  ${COLOR_CYAN}git-nav search${COLOR_RESET} <query>           Fuzzy search branches"
+  echo -e "  ${COLOR_CYAN}git-nav list${COLOR_RESET} [filter]            List branches (sorted by recent commit)"
+  echo -e "  ${COLOR_CYAN}git-nav recent${COLOR_RESET}                   Show recently visited branches"
+  echo -e "  ${COLOR_CYAN}git-nav back${COLOR_RESET} [n]                 Switch to nth previous branch (default: 1)"
+  echo -e "  ${COLOR_CYAN}git-nav ticket${COLOR_RESET} <ID>              Find branch by ticket (e.g. AVEN-43)"
+  echo -e "  ${COLOR_CYAN}git-nav type${COLOR_RESET} [type]              Browse by prefix (feature/bugfix/...)"
+  echo ""
+  echo -e "${COLOR_BOLD}BRANCH OPERATIONS:${COLOR_RESET}"
+  echo -e "  ${COLOR_CYAN}git-nav copy${COLOR_RESET} [query]             Copy branch name to clipboard (current if no query)"
+  echo -e "  ${COLOR_CYAN}git-nav copy --ticket${COLOR_RESET} [query]    Copy only the ticket ID (e.g. AVEN-43)"
+  echo -e "  ${COLOR_CYAN}git-nav merge${COLOR_RESET} [flags] <query>    Merge branch into current (supports --squash, --no-ff)"
+  echo -e "  ${COLOR_CYAN}git-nav rebase${COLOR_RESET} <query>           Rebase current branch onto matched branch"
+  echo -e "  ${COLOR_CYAN}git-nav diff${COLOR_RESET} [--stat] <query>    Diff current branch against matched branch"
+  echo -e "  ${COLOR_CYAN}git-nav log${COLOR_RESET} <query>              Show git log for matched branch"
+  echo -e "  ${COLOR_CYAN}git-nav delete${COLOR_RESET} [--force] <query> Delete matched branch (prompt for confirmation)"
   echo ""
   echo -e "${COLOR_BOLD}SEARCH EXAMPLES:${COLOR_RESET}"
   echo -e "  ${COLOR_DIM}git-nav search timeline      # matches *timeline*${COLOR_RESET}"
-  echo -e "  ${COLOR_DIM}git-nav search aven43         # fuzzy → AVEN-43${COLOR_RESET}"
-  echo -e "  ${COLOR_DIM}git-nav search tlo            # fuzzy → t.*l.*o (timeline-order)${COLOR_RESET}"
-  echo -e "  ${COLOR_DIM}git-nav ticket AVEN-43        # exact ticket lookup${COLOR_RESET}"
+  echo -e "  ${COLOR_DIM}git-nav search aven43        # fuzzy → AVEN-43${COLOR_RESET}"
+  echo -e "  ${COLOR_DIM}git-nav search tlo           # fuzzy → t.*l.*o (timeline-order)${COLOR_RESET}"
+  echo -e "  ${COLOR_DIM}git-nav ticket AVEN-43       # exact ticket lookup${COLOR_RESET}"
+  echo -e "  ${COLOR_DIM}git-nav copy                 # copy current branch name${COLOR_RESET}"
+  echo -e "  ${COLOR_DIM}git-nav copy --ticket        # copy ticket ID from current branch${COLOR_RESET}"
+  echo -e "  ${COLOR_DIM}git-nav merge main           # merge main into current${COLOR_RESET}"
+  echo -e "  ${COLOR_DIM}git-nav diff --stat main     # show changed files vs main${COLOR_RESET}"
+  echo -e "  ${COLOR_DIM}git-nav delete old-branch    # delete branch (with confirmation)${COLOR_RESET}"
   echo ""
   echo -e "${COLOR_BOLD}SHELL ALIASES (add to ~/.bashrc or ~/.zshrc):${COLOR_RESET}"
   echo -e "  ${COLOR_DIM}alias gn='git-nav'${COLOR_RESET}"
@@ -373,6 +592,7 @@ cmd_help() {
   echo -e "  ${COLOR_DIM}alias gb='git-nav back'${COLOR_RESET}"
   echo -e "  ${COLOR_DIM}alias gr='git-nav recent'${COLOR_RESET}"
   echo -e "  ${COLOR_DIM}alias gt='git-nav ticket'${COLOR_RESET}"
+  echo -e "  ${COLOR_DIM}alias gc='git-nav copy'${COLOR_RESET}"
 }
 
 # ── Main ────────────────────────────────────────────────────
@@ -385,6 +605,12 @@ case "${1:-}" in
   back|b|prev|-)    shift; cmd_back "${1:-1}" ;;
   ticket|t|jira|j)  shift; cmd_ticket "${*:-}" ;;
   type|y|prefix)    shift; cmd_type "${1:-}" ;;
+  copy|cp|yank)     shift; cmd_copy "${@}" ;;
+  merge|mg)         shift; cmd_merge "${@}" ;;
+  rebase|rb)        shift; cmd_rebase "${@}" ;;
+  diff|d)           shift; cmd_diff "${@}" ;;
+  log|lg)           shift; cmd_log "${@}" ;;
+  delete|del|rm)    shift; cmd_delete "${@}" ;;
   help|h|--help|-h) cmd_help ;;
   "")               cmd_interactive ;;
   *)

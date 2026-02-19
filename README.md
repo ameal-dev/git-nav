@@ -7,7 +7,7 @@ Tired of typing `git checkout feature/AVEN-43-timeline-entries-are-out-of-order`
 ## Install
 
 ```bash
-git clone https://github.com/YOURUSER/git-nav.git ~/tools/git-nav
+git clone https://github.com/ameal-dev/git-nav.git ~/tools/git-nav
 ln -sf ~/tools/git-nav/bin/git-nav ~/.local/bin/git-nav
 ```
 
@@ -69,10 +69,10 @@ Add to your `.zshrc` or `.bashrc`:
 
 ```bash
 alias gn='git-nav'
-alias gs='git-nav search'
-alias gb='git-nav back'
-alias gr='git-nav recent'
-alias gt='git-nav ticket'
+alias gns='git-nav search'
+alias gnb='git-nav back'
+alias gnr='git-nav recent'
+alias gnt='git-nav ticket'
 ```
 
 ## Requirements
