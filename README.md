@@ -82,4 +82,4 @@ alias gnt='git-nav ticket'
 
 ## License
 
-MIT
+MIT license
