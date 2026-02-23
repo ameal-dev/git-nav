@@ -6,6 +6,15 @@ Tired of typing `git checkout feature/AVEN-43-timeline-entries-are-out-of-order`
 
 ## Install
 
+### Homebrew (recommended)
+
+```bash
+brew tap ameal-dev/git-nav
+brew install git-nav
+```
+
+### Manual
+
 ```bash
 git clone https://github.com/ameal-dev/git-nav.git ~/tools/git-nav
 ln -sf ~/tools/git-nav/bin/git-nav ~/.local/bin/git-nav
