@@ -30,6 +30,33 @@ current_branch() {
   git symbolic-ref --short HEAD 2>/dev/null || git rev-parse --short HEAD
 }
 
+copy_to_clipboard() {
+  if command -v pbcopy &>/dev/null; then
+    echo -n "$1" | pbcopy
+  elif command -v xclip &>/dev/null; then
+    echo -n "$1" | xclip -selection clipboard
+  elif command -v wl-copy &>/dev/null; then
+    echo -n "$1" | wl-copy
+  else
+    echo -e "${COLOR_YELLOW}Warning: No clipboard tool found (pbcopy/xclip/wl-copy)${COLOR_RESET}" >&2
+    return 1
+  fi
+}
+
+title_case() {
+  echo "$1" | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) substr($i,2); print}'
+}
+
+detect_base_branch() {
+  if git show-ref --verify --quiet "refs/heads/main" 2>/dev/null; then
+    echo "main"
+  elif git show-ref --verify --quiet "refs/heads/master" 2>/dev/null; then
+    echo "master"
+  else
+    echo "main"
+  fi
+}
+
 record_switch() {
   local branch="$1"
   touch "$HISTORY_FILE"
@@ -177,6 +204,14 @@ cmd_search() {
     return 0
   fi
 
+  local count
+  count=$(echo "$branches" | wc -l | tr -d ' ')
+
+  if [[ "$count" -eq 1 ]]; then
+    do_switch "$branches"
+    return 0
+  fi
+
   echo -e "${COLOR_BOLD}Branches matching '${query}':${COLOR_RESET}\n"
 
   local i=1
@@ -304,6 +339,11 @@ cmd_back() {
     return 1
   fi
 
+  if ! git show-ref --verify --quiet "refs/heads/$target" 2>/dev/null; then
+    echo -e "${COLOR_RED}Branch '${target}' no longer exists.${COLOR_RESET}"
+    return 1
+  fi
+
   do_switch "$target"
 }
 
@@ -377,11 +417,14 @@ cmd_type() {
 
 cmd_copy() {
   local ticket_only=false
+  local desc_only=false
   local query=""
 
   for arg in "$@"; do
     if [[ "$arg" == "--ticket" ]]; then
       ticket_only=true
+    elif [[ "$arg" == "--desc" ]]; then
+      desc_only=true
     else
       query="$arg"
     fi
@@ -402,9 +445,18 @@ cmd_copy() {
       echo -e "${COLOR_YELLOW}No ticket ID found in branch: ${branch}${COLOR_RESET}"
       return 1
     fi
+  elif $desc_only; then
+    # Extract description part: type/TICKET-desc-words → "Desc Words"
+    if [[ "$branch" =~ ^[^/]+/[A-Z]+-[0-9]+-(.+)$ ]]; then
+      to_copy=$(title_case "$(echo "${BASH_REMATCH[1]}" | tr '-' ' ')")
+    elif [[ "$branch" =~ ^[^/]+/(.+)$ ]]; then
+      to_copy=$(title_case "$(echo "${BASH_REMATCH[1]}" | tr '-' ' ')")
+    else
+      to_copy=$(title_case "$(echo "$branch" | tr '-' ' ')")
+    fi
   fi
 
-  echo -n "$to_copy" | pbcopy
+  copy_to_clipboard "$to_copy"
   echo -e "${COLOR_GREEN}✓ Copied to clipboard:${COLOR_RESET} ${COLOR_BOLD}${to_copy}${COLOR_RESET}"
 }
 
@@ -471,13 +523,13 @@ cmd_diff() {
 
 cmd_log() {
   local query="${1:-}"
-  if [[ -z "$query" ]]; then
-    echo -e "${COLOR_RED}Usage: git-nav log <query>${COLOR_RESET}"
-    return 1
-  fi
 
   local branch
-  branch=$(pick_branch "$query") || return 1
+  if [[ -z "$query" ]]; then
+    branch=$(current_branch)
+  else
+    branch=$(pick_branch "$query") || return 1
+  fi
 
   git log "$branch"
 }
@@ -515,6 +567,245 @@ cmd_delete() {
   else
     echo -e "${COLOR_DIM}Aborted.${COLOR_RESET}"
   fi
+}
+
+cmd_branch() {
+  local type="${1:-}"
+  local ticket="${2:-}"
+  local description="${3:-}"
+
+  # Support shorthand: gnb AVEN-112 description (type defaults to feat)
+  if [[ "$type" =~ ^[A-Z]+-[0-9]+$ ]]; then
+    description="$ticket"
+    ticket="$type"
+    type="feat"
+  fi
+
+  if [[ -z "$type" || -z "$ticket" || -z "$description" ]]; then
+    echo -e "${COLOR_RED}Usage: git-nav branch <type> <ticket> <description>${COLOR_RESET}"
+    echo -e "${COLOR_DIM}  e.g. git-nav branch feat AVEN-112 my-new-feature${COLOR_RESET}"
+    echo -e "${COLOR_DIM}  or   git-nav branch AVEN-112 my-new-feature  (type defaults to feat)${COLOR_RESET}"
+    return 1
+  fi
+
+  # Normalize description: lowercase, spaces/underscores to hyphens, strip non-alphanumeric
+  local slug
+  slug=$(echo "$description" | tr '[:upper:]' '[:lower:]' | tr ' _' '-' | sed 's/[^a-z0-9-]//g' | sed 's/--*/-/g')
+
+  local branch_name="${type}/${ticket}-${slug}"
+  local base
+  base=$(detect_base_branch)
+
+  echo -e "${COLOR_CYAN}Syncing ${COLOR_BOLD}${base}${COLOR_RESET}${COLOR_CYAN}...${COLOR_RESET}"
+  git checkout "$base" 2>/dev/null
+  git pull origin "$base" 2>/dev/null || true
+
+  echo -e "${COLOR_CYAN}Creating ${COLOR_BOLD}${branch_name}${COLOR_RESET}${COLOR_CYAN} from ${base}...${COLOR_RESET}"
+  git checkout -b "$branch_name"
+  record_switch "$branch_name"
+  echo -e "${COLOR_GREEN}✓ Created and switched to ${COLOR_BOLD}${branch_name}${COLOR_RESET}"
+}
+
+cmd_what() {
+  local query="${1:-}"
+
+  local branch
+  if [[ -z "$query" ]]; then
+    branch=$(current_branch)
+  else
+    branch=$(pick_branch "$query") || return 1
+  fi
+
+  local base
+  base=$(detect_base_branch)
+
+  echo -e "${COLOR_BOLD}Branch:${COLOR_RESET} ${COLOR_CYAN}${branch}${COLOR_RESET}"
+
+  if [[ "$branch" =~ ([A-Z]+-[0-9]+) ]]; then
+    echo -e "${COLOR_BOLD}Ticket:${COLOR_RESET} ${COLOR_YELLOW}${BASH_REMATCH[1]}${COLOR_RESET}"
+  fi
+
+  local ahead behind
+  ahead=$(git rev-list --count "${base}..${branch}" 2>/dev/null || echo 0)
+  behind=$(git rev-list --count "${branch}..${base}" 2>/dev/null || echo 0)
+
+  echo -e "${COLOR_BOLD}Base:${COLOR_RESET}   ${base} (${COLOR_GREEN}+${ahead} ahead${COLOR_RESET} / ${COLOR_RED}-${behind} behind${COLOR_RESET})"
+  echo ""
+
+  if [[ "$ahead" -gt 0 ]]; then
+    echo -e "${COLOR_BOLD}Your commits (${ahead}):${COLOR_RESET}"
+    git log --oneline "${base}..${branch}" | while IFS= read -r line; do
+      echo -e "  ${COLOR_DIM}${line}${COLOR_RESET}"
+    done
+    echo ""
+  fi
+
+  local stat
+  stat=$(git diff --stat "${base}...${branch}" 2>/dev/null | tail -1)
+  if [[ -n "$stat" ]]; then
+    echo -e "${COLOR_BOLD}Changes:${COLOR_RESET} ${stat}"
+  fi
+}
+
+cmd_status() {
+  local base
+  base=$(detect_base_branch)
+
+  local current
+  current=$(current_branch)
+
+  # Use history branches if available, otherwise fall back to recent local branches
+  local branches
+  if [[ -f "$HISTORY_FILE" && -s "$HISTORY_FILE" ]]; then
+    branches=$(cat "$HISTORY_FILE")
+  else
+    branches=$(git branch --format='%(refname:short)' --sort=-committerdate | head -10)
+  fi
+
+  printf "\n${COLOR_BOLD}%-42s  %5s  %6s  %-8s${COLOR_RESET}\n" "BRANCH" "AHEAD" "BEHIND" "AGE"
+  printf "${COLOR_DIM}%-42s  %5s  %6s  %-8s${COLOR_RESET}\n" "──────────────────────────────────────────" "─────" "──────" "────────"
+
+  while IFS= read -r branch; do
+    git show-ref --verify --quiet "refs/heads/$branch" 2>/dev/null || continue
+
+    local ahead behind age
+    ahead=$(git rev-list --count "${base}..${branch}" 2>/dev/null || echo 0)
+    behind=$(git rev-list --count "${branch}..${base}" 2>/dev/null || echo 0)
+    age=$(git log -1 --format='%cr' "$branch" 2>/dev/null || echo "?")
+
+    local marker=""
+    [[ "$branch" == "$current" ]] && marker="${COLOR_GREEN}●${COLOR_RESET} "
+
+    local pr_info=""
+    if command -v gh &>/dev/null; then
+      local pr_number
+      pr_number=$(gh pr list --head "$branch" --json number --jq '.[0].number' 2>/dev/null || true)
+      [[ -n "$pr_number" ]] && pr_info="  ${COLOR_CYAN}← PR #${pr_number}${COLOR_RESET}"
+    fi
+
+    local display_branch="$branch"
+    if [[ ${#branch} -gt 40 ]]; then
+      display_branch="${branch:0:37}..."
+    fi
+
+    printf "  ${marker}${COLOR_RESET}%-40s  ${COLOR_GREEN}%5s${COLOR_RESET}  ${COLOR_RED}%6s${COLOR_RESET}  ${COLOR_DIM}%-8s${COLOR_RESET}%b\n" \
+      "$display_branch" "$ahead" "$behind" "$age" "$pr_info"
+  done <<< "$branches"
+
+  echo ""
+}
+
+cmd_stash() {
+  local subcommand="${1:-}"
+
+  case "$subcommand" in
+    pop)
+      local current
+      current=$(current_branch)
+
+      local stash_list
+      stash_list=$(git stash list 2>/dev/null || true)
+
+      if [[ -z "$stash_list" ]]; then
+        echo -e "${COLOR_YELLOW}No stashes found.${COLOR_RESET}"
+        return 0
+      fi
+
+      echo -e "${COLOR_BOLD}Stashes (current branch first):${COLOR_RESET}\n"
+
+      # Separate current-branch stashes from others
+      local current_stashes=()
+      local other_stashes=()
+      while IFS= read -r line; do
+        if echo "$line" | grep -qF "$current"; then
+          current_stashes+=("$line")
+        else
+          other_stashes+=("$line")
+        fi
+      done <<< "$stash_list"
+
+      local all_stashes=("${current_stashes[@]+"${current_stashes[@]}"}" "${other_stashes[@]+"${other_stashes[@]}"}")
+
+      local idx=1
+      for stash in "${all_stashes[@]}"; do
+        local stash_ref stash_msg
+        stash_ref=$(echo "$stash" | grep -o 'stash@{[0-9]*}')
+        stash_msg=$(echo "$stash" | sed 's/stash@{[0-9]*}: //')
+        if echo "$stash" | grep -qF "$current"; then
+          printf "  ${COLOR_GREEN}%2d${COLOR_RESET}  ${COLOR_BOLD}%s${COLOR_RESET}  ${COLOR_DIM}%s${COLOR_RESET}\n" "$idx" "$stash_ref" "$stash_msg"
+        else
+          printf "  ${COLOR_YELLOW}%2d${COLOR_RESET}  ${COLOR_DIM}%s  %s${COLOR_RESET}\n" "$idx" "$stash_ref" "$stash_msg"
+        fi
+        ((idx++))
+      done
+
+      echo ""
+      echo -ne "${COLOR_DIM}Pop stash #: ${COLOR_RESET}"
+      read -r choice
+
+      if [[ "$choice" =~ ^[0-9]+$ && "$choice" -ge 1 && "$choice" -le "${#all_stashes[@]}" ]]; then
+        local selected="${all_stashes[$((choice-1))]}"
+        local stash_ref
+        stash_ref=$(echo "$selected" | grep -o 'stash@{[0-9]*}')
+        git stash pop "$stash_ref"
+        echo -e "${COLOR_GREEN}✓ Popped ${stash_ref}${COLOR_RESET}"
+      else
+        echo -e "${COLOR_DIM}No selection made.${COLOR_RESET}"
+      fi
+      ;;
+
+    "")
+      local current
+      current=$(current_branch)
+      local timestamp
+      timestamp=$(date '+%H:%M')
+      local message="${current} @ ${timestamp}"
+      git stash push -m "$message"
+      echo -e "${COLOR_GREEN}✓ Stashed as: ${COLOR_BOLD}${message}${COLOR_RESET}"
+      ;;
+
+    *)
+      echo -e "${COLOR_RED}Usage: git-nav stash [pop]${COLOR_RESET}"
+      return 1
+      ;;
+  esac
+}
+
+cmd_pr() {
+  if ! command -v gh &>/dev/null; then
+    echo -e "${COLOR_RED}Error: 'gh' CLI not found. Install from https://cli.github.com${COLOR_RESET}"
+    return 1
+  fi
+
+  local base="${1:-}"
+  if [[ -z "$base" ]]; then
+    base=$(detect_base_branch)
+  fi
+
+  local branch
+  branch=$(current_branch)
+
+  # Auto-populate title from branch name
+  local title="$branch"
+  if [[ "$branch" =~ ^[^/]+/([A-Z]+-[0-9]+)-(.+)$ ]]; then
+    local ticket="${BASH_REMATCH[1]}"
+    local desc
+    desc=$(title_case "$(echo "${BASH_REMATCH[2]}" | tr '-' ' ')")
+    title="${ticket}: ${desc}"
+  fi
+
+  echo -e "${COLOR_CYAN}Creating PR: ${COLOR_BOLD}${branch}${COLOR_RESET}${COLOR_CYAN} → ${base}${COLOR_RESET}"
+  echo -e "${COLOR_DIM}Title: ${title}${COLOR_RESET}"
+
+  local url
+  url=$(gh pr create --base "$base" --title "$title" --body "" 2>&1) || {
+    echo -e "${COLOR_RED}✗ Failed to create PR${COLOR_RESET}"
+    echo -e "${COLOR_DIM}${url}${COLOR_RESET}"
+    return 1
+  }
+
+  echo -e "${COLOR_GREEN}✓ PR created: ${COLOR_BOLD}${branch}${COLOR_RESET}${COLOR_GREEN} → ${base}${COLOR_RESET}"
+  echo -e "  ${COLOR_CYAN}${url}${COLOR_RESET}"
 }
 
 cmd_interactive() {
@@ -567,52 +858,75 @@ cmd_help() {
   echo -e "  ${COLOR_CYAN}git-nav type${COLOR_RESET} [type]              Browse by prefix (feature/bugfix/...)"
   echo ""
   echo -e "${COLOR_BOLD}BRANCH OPERATIONS:${COLOR_RESET}"
-  echo -e "  ${COLOR_CYAN}git-nav copy${COLOR_RESET} [query]             Copy branch name to clipboard (current if no query)"
+  echo -e "  ${COLOR_CYAN}git-nav branch${COLOR_RESET} [type] <ticket> <desc>  Create branch, syncs base first (type defaults to 'feat')"
+  echo -e "  ${COLOR_CYAN}git-nav copy${COLOR_RESET} [query]             Copy branch name to clipboard"
   echo -e "  ${COLOR_CYAN}git-nav copy --ticket${COLOR_RESET} [query]    Copy only the ticket ID (e.g. AVEN-43)"
+  echo -e "  ${COLOR_CYAN}git-nav copy --desc${COLOR_RESET} [query]      Copy description, title-cased (e.g. 'Add Payment Flow')"
+  echo -e "  ${COLOR_CYAN}git-nav pr${COLOR_RESET} [base]                Open PR for current branch (default base: main)"
   echo -e "  ${COLOR_CYAN}git-nav merge${COLOR_RESET} [flags] <query>    Merge branch into current (supports --squash, --no-ff)"
   echo -e "  ${COLOR_CYAN}git-nav rebase${COLOR_RESET} <query>           Rebase current branch onto matched branch"
   echo -e "  ${COLOR_CYAN}git-nav diff${COLOR_RESET} [--stat] <query>    Diff current branch against matched branch"
-  echo -e "  ${COLOR_CYAN}git-nav log${COLOR_RESET} <query>              Show git log for matched branch"
+  echo -e "  ${COLOR_CYAN}git-nav log${COLOR_RESET} [query]              Show git log for matched branch (current if no query)"
   echo -e "  ${COLOR_CYAN}git-nav delete${COLOR_RESET} [--force] <query> Delete matched branch (prompt for confirmation)"
   echo ""
-  echo -e "${COLOR_BOLD}SEARCH EXAMPLES:${COLOR_RESET}"
-  echo -e "  ${COLOR_DIM}git-nav search timeline      # matches *timeline*${COLOR_RESET}"
-  echo -e "  ${COLOR_DIM}git-nav search aven43        # fuzzy → AVEN-43${COLOR_RESET}"
-  echo -e "  ${COLOR_DIM}git-nav search tlo           # fuzzy → t.*l.*o (timeline-order)${COLOR_RESET}"
-  echo -e "  ${COLOR_DIM}git-nav ticket AVEN-43       # exact ticket lookup${COLOR_RESET}"
-  echo -e "  ${COLOR_DIM}git-nav copy                 # copy current branch name${COLOR_RESET}"
-  echo -e "  ${COLOR_DIM}git-nav copy --ticket        # copy ticket ID from current branch${COLOR_RESET}"
-  echo -e "  ${COLOR_DIM}git-nav merge main           # merge main into current${COLOR_RESET}"
-  echo -e "  ${COLOR_DIM}git-nav diff --stat main     # show changed files vs main${COLOR_RESET}"
-  echo -e "  ${COLOR_DIM}git-nav delete old-branch    # delete branch (with confirmation)${COLOR_RESET}"
+  echo -e "${COLOR_BOLD}CONTEXT & STATUS:${COLOR_RESET}"
+  echo -e "  ${COLOR_CYAN}git-nav what${COLOR_RESET} [query]             Commits + diff summary for a branch"
+  echo -e "  ${COLOR_CYAN}git-nav status${COLOR_RESET}                   Dashboard: ahead/behind/age for recent branches"
+  echo -e "  ${COLOR_CYAN}git-nav stash${COLOR_RESET}                    Stash with branch+timestamp message"
+  echo -e "  ${COLOR_CYAN}git-nav stash pop${COLOR_RESET}                Pop stash (current branch stashes shown first)"
   echo ""
-  echo -e "${COLOR_BOLD}SHELL ALIASES (add to ~/.bashrc or ~/.zshrc):${COLOR_RESET}"
-  echo -e "  ${COLOR_DIM}alias gn='git-nav'${COLOR_RESET}"
-  echo -e "  ${COLOR_DIM}alias gs='git-nav search'${COLOR_RESET}"
-  echo -e "  ${COLOR_DIM}alias gb='git-nav back'${COLOR_RESET}"
-  echo -e "  ${COLOR_DIM}alias gr='git-nav recent'${COLOR_RESET}"
-  echo -e "  ${COLOR_DIM}alias gt='git-nav ticket'${COLOR_RESET}"
-  echo -e "  ${COLOR_DIM}alias gc='git-nav copy'${COLOR_RESET}"
+  echo -e "${COLOR_BOLD}EXAMPLES:${COLOR_RESET}"
+  echo -e "  ${COLOR_DIM}git-nav branch AVEN-112 add-payment-flow       # creates feat/AVEN-112-add-payment-flow${COLOR_RESET}"
+  echo -e "  ${COLOR_DIM}git-nav copy --desc                            # copies 'Add Payment Flow'${COLOR_RESET}"
+  echo -e "  ${COLOR_DIM}git-nav pr                                     # PR → main with auto title${COLOR_RESET}"
+  echo -e "  ${COLOR_DIM}git-nav pr develop                             # PR → develop${COLOR_RESET}"
+  echo -e "  ${COLOR_DIM}git-nav what                                   # summary of current branch${COLOR_RESET}"
+  echo -e "  ${COLOR_DIM}git-nav status                                 # overview of recent branches${COLOR_RESET}"
+  echo -e "  ${COLOR_DIM}git-nav stash                                  # stash as 'feat/AVEN-111 @ 14:32'${COLOR_RESET}"
+  echo -e "  ${COLOR_DIM}git-nav search aven43                          # fuzzy → AVEN-43${COLOR_RESET}"
+  echo -e "  ${COLOR_DIM}git-nav copy --ticket                          # copy ticket ID from current branch${COLOR_RESET}"
+  echo -e "  ${COLOR_DIM}git-nav merge main                             # merge main into current${COLOR_RESET}"
+  echo -e "  ${COLOR_DIM}git-nav diff --stat main                       # show changed files vs main${COLOR_RESET}"
+  echo ""
+  echo -e "${COLOR_BOLD}SHELL ALIASES:${COLOR_RESET}"
+  echo -e "  ${COLOR_CYAN}gn${COLOR_RESET}      git-nav (interactive)"
+  echo -e "  ${COLOR_CYAN}gnb${COLOR_RESET}     git-nav branch"
+  echo -e "  ${COLOR_CYAN}gnc${COLOR_RESET}     git-nav copy"
+  echo -e "  ${COLOR_CYAN}gnpr${COLOR_RESET}    git-nav pr"
+  echo -e "  ${COLOR_CYAN}gnm${COLOR_RESET}     git-nav merge"
+  echo -e "  ${COLOR_CYAN}gnrb${COLOR_RESET}    git-nav rebase"
+  echo -e "  ${COLOR_CYAN}gnd${COLOR_RESET}     git-nav diff"
+  echo -e "  ${COLOR_CYAN}gnl${COLOR_RESET}     git-nav log"
+  echo -e "  ${COLOR_CYAN}gndel${COLOR_RESET}   git-nav delete"
+  echo -e "  ${COLOR_CYAN}gnw${COLOR_RESET}     git-nav what"
+  echo -e "  ${COLOR_CYAN}gns${COLOR_RESET}     git-nav status"
+  echo -e "  ${COLOR_CYAN}gnst${COLOR_RESET}    git-nav stash"
+  echo -e "  ${COLOR_CYAN}gnkeys${COLOR_RESET}  git-nav help"
 }
 
 # ── Main ────────────────────────────────────────────────────
 ensure_git_repo
 
 case "${1:-}" in
-  search|s|find|f)  shift; cmd_search "${*:-}" ;;
-  list|l|ls)        shift; cmd_list "${1:-}" ;;
-  recent|r)         cmd_recent ;;
-  back|b|prev|-)    shift; cmd_back "${1:-1}" ;;
-  ticket|t|jira|j)  shift; cmd_ticket "${*:-}" ;;
-  type|y|prefix)    shift; cmd_type "${1:-}" ;;
-  copy|cp|yank)     shift; cmd_copy "${@}" ;;
-  merge|mg)         shift; cmd_merge "${@}" ;;
-  rebase|rb)        shift; cmd_rebase "${@}" ;;
-  diff|d)           shift; cmd_diff "${@}" ;;
-  log|lg)           shift; cmd_log "${@}" ;;
-  delete|del|rm)    shift; cmd_delete "${@}" ;;
-  help|h|--help|-h) cmd_help ;;
-  "")               cmd_interactive ;;
+  search|s|find|f)    shift; cmd_search "${*:-}" ;;
+  list|l|ls)          shift; cmd_list "${1:-}" ;;
+  recent|r)           cmd_recent ;;
+  back|b|prev|-)      shift; cmd_back "${1:-1}" ;;
+  ticket|t|jira|j)    shift; cmd_ticket "${*:-}" ;;
+  type|y|prefix)      shift; cmd_type "${1:-}" ;;
+  copy|cp|yank)       shift; cmd_copy "${@:-}" ;;
+  branch|br)          shift; cmd_branch "${@:-}" ;;
+  pr)                 shift; cmd_pr "${@:-}" ;;
+  merge|mg)           shift; cmd_merge "${@:-}" ;;
+  rebase|rb)          shift; cmd_rebase "${@:-}" ;;
+  diff|d)             shift; cmd_diff "${@:-}" ;;
+  log|lg)             shift; cmd_log "${@:-}" ;;
+  delete|del|rm)      shift; cmd_delete "${@:-}" ;;
+  what|w)             shift; cmd_what "${@:-}" ;;
+  status|st)          shift; cmd_status ;;
+  stash)              shift; cmd_stash "${@:-}" ;;
+  help|h|--help|-h)   cmd_help ;;
+  "")                 cmd_interactive ;;
   *)
     # If arg doesn't match a command, treat it as a search query
     cmd_search "$*"
