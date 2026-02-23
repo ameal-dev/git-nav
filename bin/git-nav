@@ -925,6 +925,7 @@ case "${1:-}" in
   what|w)             shift; cmd_what "${@:-}" ;;
   status|st)          shift; cmd_status ;;
   stash)              shift; cmd_stash "${@:-}" ;;
+  --version|-V|version) echo "git-nav 1.0.0"; exit 0 ;;
   help|h|--help|-h)   cmd_help ;;
   "")                 cmd_interactive ;;
   *)
