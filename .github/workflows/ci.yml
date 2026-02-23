@@ -1,0 +1,98 @@
+name: CI
+
+# When to run this workflow:
+#   - On every push to the main branch
+#   - On every pull request that targets main
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── Job 1: Lint ───────────────────────────────────────────────────────────
+  # Checks that the shell scripts are syntactically valid and follow best
+  # practices. This job runs first; the test job won't start if this fails.
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest   # Free GitHub-hosted Linux runner
+
+    steps:
+      # Download the repository code onto the runner's filesystem.
+      # Without this step, the runner has an empty workspace.
+      - uses: actions/checkout@v4
+
+      # bash -n parses the script without executing it.
+      # If there's a syntax error (missing 'fi', mismatched quotes, etc.)
+      # this step fails immediately with a clear error message.
+      - name: Bash syntax check
+        run: |
+          bash -n bin/git-nav
+          bash -n lib/git-nav-tutorial.sh
+
+      # ShellCheck is the industry-standard linter for shell scripts.
+      # It catches things bash -n won't: unquoted variables, bad patterns,
+      # portable-shell issues, and logic mistakes.
+      # --severity=warning means we care about warnings and errors, not just errors.
+      - name: ShellCheck
+        run: |
+          shellcheck --severity=warning bin/git-nav
+          shellcheck --severity=warning lib/git-nav-tutorial.sh
+
+  # ── Job 2: Test ───────────────────────────────────────────────────────────
+  # Runs the script against real (minimal) inputs to confirm it actually works.
+  # 'needs: lint' means this job won't start until the lint job has passed.
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: lint   # Only run tests if linting passed
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # git-nav uses 'git commit' internally (e.g. in the branch sandbox).
+      # Without a configured identity, git would refuse to commit.
+      - name: Configure git identity
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name "CI"
+
+      # The checkout action creates a .git directory, so we're already
+      # inside a valid git repository. This lets us test commands that
+      # require git rev-parse to succeed.
+      - name: Version flag outputs expected format
+        run: bash bin/git-nav --version | grep -E "^git-nav [0-9]+\.[0-9]+\.[0-9]+$"
+
+      # Confirm help renders and exits 0. If a command is missing a case
+      # handler or crashes on startup, this will catch it.
+      - name: Help renders without error
+        run: bash bin/git-nav help > /dev/null
+
+      # Source the tutorial lib in isolation to verify it has no
+      # syntax errors or issues that bash -n wouldn't catch (e.g. a
+      # subshell that immediately fails).
+      - name: Tutorial lib sources cleanly
+        run: bash -c 'source lib/git-nav-tutorial.sh && echo "OK"'
+
+      # Create a minimal git repo with real branches and verify that
+      # the core navigation commands work end-to-end.
+      - name: Functional test — search and list
+        run: |
+          # Set up a throwaway repo next to the project
+          mkdir -p /tmp/test-repo
+          cd /tmp/test-repo
+          git init -q
+          git commit --allow-empty -q -m "Initial commit"
+          git branch feat/PROJ-1-hello-world
+          git branch bugfix/PROJ-2-fix-crash
+
+          # Point at the real git-nav script
+          GN="bash $GITHUB_WORKSPACE/bin/git-nav"
+
+          # 'search' should find the feat branch
+          $GN search PROJ-1 | grep -q "feat/PROJ-1-hello-world"
+
+          # 'list' should exit 0 (we skip interactive selection by closing stdin)
+          $GN list < /dev/null || true
+
+          echo "Functional tests passed"

@@ -1,0 +1,63 @@
+name: Release
+
+# Trigger this workflow only when you push a tag that starts with 'v'.
+# Example: git tag v1.1.0 && git push origin v1.1.0
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+
+    # This permission lets the workflow write to GitHub Releases.
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Fetch all history so the release notes can reference all commits.
+          fetch-depth: 0
+
+      # Extract the version string from the tag reference.
+      # GITHUB_REF looks like: refs/tags/v1.1.0
+      # We strip the prefix to get: v1.1.0
+      - name: Extract version
+        id: version
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Tag: $VERSION"
+
+      # Create a draft release on GitHub.
+      # Draft = not public yet; you review and publish it manually.
+      # generate_release_notes = GitHub auto-writes notes from commits
+      # between this tag and the previous one.
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: "git-nav ${{ steps.version.outputs.version }}"
+          draft: true                  # Review before publishing
+          generate_release_notes: true # Auto-populate from commits
+          body: |
+            ## Install via Homebrew
+
+            ```sh
+            brew upgrade git-nav
+            ```
+
+            ---
+
+            **Before publishing this release:**
+            Update `Formula/git-nav.rb` with the new version and SHA256:
+
+            ```sh
+            # Get the SHA256 of the new tarball (run this locally after the tag is pushed):
+            curl -sL https://github.com/${{ github.repository }}/archive/refs/tags/${{ steps.version.outputs.version }}.tar.gz | sha256sum
+            ```
+
+            Then update `url` and `sha256` in `Formula/git-nav.rb`, commit, and push before publishing this release.
