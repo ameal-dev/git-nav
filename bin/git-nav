@@ -7,7 +7,6 @@
 set -euo pipefail
 
 # ── Config ──────────────────────────────────────────────────
-HISTORY_FILE="$HOME/.git-nav-history"
 MAX_HISTORY=20
 COLOR_RESET="\033[0m"
 COLOR_GREEN="\033[1;32m"
@@ -57,13 +56,18 @@ detect_base_branch() {
   fi
 }
 
+history_file() {
+  echo "$(git rev-parse --git-common-dir)/git-nav-history"
+}
+
 record_switch() {
   local branch="$1"
-  touch "$HISTORY_FILE"
-  # Remove duplicates, prepend new entry, trim to max
-  grep -vxF "$branch" "$HISTORY_FILE" > "${HISTORY_FILE}.tmp" 2>/dev/null || true
-  { echo "$branch"; cat "${HISTORY_FILE}.tmp"; } | head -n "$MAX_HISTORY" > "$HISTORY_FILE"
-  rm -f "${HISTORY_FILE}.tmp"
+  local hf
+  hf=$(history_file)
+  touch "$hf"
+  grep -vxF "$branch" "$hf" > "${hf}.tmp" 2>/dev/null || true
+  { echo "$branch"; cat "${hf}.tmp"; } | head -n "$MAX_HISTORY" > "$hf"
+  rm -f "${hf}.tmp"
 }
 
 do_switch() {
@@ -76,11 +80,13 @@ do_switch() {
     return 0
   fi
 
-  if git checkout "$branch" 2>/dev/null; then
+  local git_output
+  if git_output=$(git checkout "$branch" 2>&1); then
     record_switch "$branch"
     echo -e "${COLOR_GREEN}✓ Switched to ${COLOR_BOLD}$branch${COLOR_RESET}"
   else
     echo -e "${COLOR_RED}✗ Failed to switch to ${COLOR_BOLD}$branch${COLOR_RESET}"
+    echo -e "${COLOR_DIM}${git_output}${COLOR_RESET}"
     return 1
   fi
 }
@@ -279,7 +285,10 @@ cmd_list() {
 }
 
 cmd_recent() {
-  if [[ ! -f "$HISTORY_FILE" ]] || [[ ! -s "$HISTORY_FILE" ]]; then
+  local hf
+  hf=$(history_file)
+
+  if [[ ! -f "$hf" ]] || [[ ! -s "$hf" ]]; then
     echo -e "${COLOR_YELLOW}No branch history yet. Start switching!${COLOR_RESET}"
     return 0
   fi
@@ -298,7 +307,7 @@ cmd_recent() {
       printf "  ${COLOR_YELLOW}%2d${COLOR_RESET}  %b\n" "$i" "$formatted"
       ((i++))
     fi
-  done < "$HISTORY_FILE"
+  done < "$hf"
 
   echo ""
   echo -ne "${COLOR_DIM}Switch to branch #: ${COLOR_RESET}"
@@ -315,7 +324,7 @@ cmd_recent() {
           break
         fi
       fi
-    done < "$HISTORY_FILE"
+    done < "$hf"
 
     if [[ -n "${target:-}" ]]; then
       do_switch "$target"
@@ -325,14 +334,16 @@ cmd_recent() {
 
 cmd_back() {
   local steps="${1:-1}"
+  local hf
+  hf=$(history_file)
 
-  if [[ ! -f "$HISTORY_FILE" ]]; then
+  if [[ ! -f "$hf" ]]; then
     echo -e "${COLOR_YELLOW}No history to go back to.${COLOR_RESET}"
     return 1
   fi
 
   local target
-  target=$(sed -n "${steps}p" "$HISTORY_FILE")
+  target=$(sed -n "${steps}p" "$hf")
 
   if [[ -z "$target" ]]; then
     echo -e "${COLOR_RED}No branch at position $steps in history.${COLOR_RESET}"
@@ -656,8 +667,10 @@ cmd_status() {
 
   # Use history branches if available, otherwise fall back to recent local branches
   local branches
-  if [[ -f "$HISTORY_FILE" && -s "$HISTORY_FILE" ]]; then
-    branches=$(cat "$HISTORY_FILE")
+  local hf
+  hf=$(history_file)
+  if [[ -f "$hf" && -s "$hf" ]]; then
+    branches=$(cat "$hf")
   else
     branches=$(git branch --format='%(refname:short)' --sort=-committerdate | head -10)
   fi
@@ -771,6 +784,73 @@ cmd_stash() {
   esac
 }
 
+cmd_commit() {
+  local use_ticket=false
+  local commit_type=""
+  local message=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -t|--ticket)
+        use_ticket=true
+        shift
+        ;;
+      -f|--feat)
+        commit_type="feat"
+        shift
+        ;;
+      -c|--chore)
+        commit_type="chore"
+        shift
+        ;;
+      *)
+        message="$1"
+        shift
+        ;;
+    esac
+  done
+
+  if [[ -z "$message" ]]; then
+    echo -e "${COLOR_RED}Usage: git-nav commit [-t] [-f] [-c] <message>${COLOR_RESET}"
+    echo -e "${COLOR_DIM}  -t  Prepend ticket ID from branch name${COLOR_RESET}"
+    echo -e "${COLOR_DIM}  -f  Conventional commit: feat(<TICKET>): message${COLOR_RESET}"
+    echo -e "${COLOR_DIM}  -c  Conventional commit: chore(<TICKET>): message${COLOR_RESET}"
+    return 1
+  fi
+
+  if [[ -n "$commit_type" ]]; then
+    local branch ticket=""
+    branch=$(current_branch)
+    if [[ "$branch" =~ ([A-Za-z]+-[0-9]+) ]]; then
+      ticket="${BASH_REMATCH[1]}"
+    fi
+    if [[ -z "$ticket" ]]; then
+      echo -e "${COLOR_RED}No ticket ID found in branch: ${branch}${COLOR_RESET}"
+      return 1
+    fi
+    message="${commit_type}(${ticket}): ${message}"
+  elif $use_ticket; then
+    local branch
+    branch=$(current_branch)
+
+    local ticket=""
+    if [[ "$branch" =~ ([A-Z]+-[A-Z0-9]+) ]]; then
+      ticket="${BASH_REMATCH[1]}"
+    fi
+
+    if [[ -z "$ticket" ]]; then
+      echo -e "${COLOR_RED}No ticket ID found in branch: ${branch}${COLOR_RESET}"
+      return 1
+    fi
+
+    message="${ticket}: ${message}"
+  fi
+
+  echo -e "${COLOR_CYAN}Committing: ${COLOR_BOLD}${message}${COLOR_RESET}"
+  git commit -am "$message"
+  echo -e "${COLOR_GREEN}✓ Committed${COLOR_RESET}"
+}
+
 cmd_pr() {
   if ! command -v gh &>/dev/null; then
     echo -e "${COLOR_RED}Error: 'gh' CLI not found. Install from https://cli.github.com${COLOR_RESET}"
@@ -845,6 +925,14 @@ cmd_interactive() {
   esac
 }
 
+cmd_tutorial() {
+  local SCRIPT_DIR
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  # shellcheck source=../lib/git-nav-tutorial.sh
+  source "$SCRIPT_DIR/../lib/git-nav-tutorial.sh"
+  _tutorial_main
+}
+
 cmd_help() {
   echo -e "${COLOR_BOLD}🔀 git-nav — Smart Git Branch Navigator${COLOR_RESET}"
   echo ""
@@ -862,6 +950,7 @@ cmd_help() {
   echo -e "  ${COLOR_CYAN}git-nav copy${COLOR_RESET} [query]             Copy branch name to clipboard"
   echo -e "  ${COLOR_CYAN}git-nav copy --ticket${COLOR_RESET} [query]    Copy only the ticket ID (e.g. AVEN-43)"
   echo -e "  ${COLOR_CYAN}git-nav copy --desc${COLOR_RESET} [query]      Copy description, title-cased (e.g. 'Add Payment Flow')"
+  echo -e "  ${COLOR_CYAN}git-nav commit${COLOR_RESET} [-t] <message>     Commit all with message (-t prepends ticket from branch)"
   echo -e "  ${COLOR_CYAN}git-nav pr${COLOR_RESET} [base]                Open PR for current branch (default base: main)"
   echo -e "  ${COLOR_CYAN}git-nav merge${COLOR_RESET} [flags] <query>    Merge branch into current (supports --squash, --no-ff)"
   echo -e "  ${COLOR_CYAN}git-nav rebase${COLOR_RESET} <query>           Rebase current branch onto matched branch"
@@ -878,6 +967,8 @@ cmd_help() {
   echo -e "${COLOR_BOLD}EXAMPLES:${COLOR_RESET}"
   echo -e "  ${COLOR_DIM}git-nav branch AVEN-112 add-payment-flow       # creates feat/AVEN-112-add-payment-flow${COLOR_RESET}"
   echo -e "  ${COLOR_DIM}git-nav copy --desc                            # copies 'Add Payment Flow'${COLOR_RESET}"
+  echo -e "  ${COLOR_DIM}git-nav commit 'fix typo'                      # git commit -am 'fix typo'${COLOR_RESET}"
+  echo -e "  ${COLOR_DIM}git-nav commit -t 'fix typo'                   # git commit -am 'AVEN-111: fix typo'${COLOR_RESET}"
   echo -e "  ${COLOR_DIM}git-nav pr                                     # PR → main with auto title${COLOR_RESET}"
   echo -e "  ${COLOR_DIM}git-nav pr develop                             # PR → develop${COLOR_RESET}"
   echo -e "  ${COLOR_DIM}git-nav what                                   # summary of current branch${COLOR_RESET}"
@@ -892,6 +983,7 @@ cmd_help() {
   echo -e "  ${COLOR_CYAN}gn${COLOR_RESET}      git-nav (interactive)"
   echo -e "  ${COLOR_CYAN}gnb${COLOR_RESET}     git-nav branch"
   echo -e "  ${COLOR_CYAN}gnc${COLOR_RESET}     git-nav copy"
+  echo -e "  ${COLOR_CYAN}gncom${COLOR_RESET}   git-nav commit"
   echo -e "  ${COLOR_CYAN}gnpr${COLOR_RESET}    git-nav pr"
   echo -e "  ${COLOR_CYAN}gnm${COLOR_RESET}     git-nav merge"
   echo -e "  ${COLOR_CYAN}gnrb${COLOR_RESET}    git-nav rebase"
@@ -905,6 +997,12 @@ cmd_help() {
 }
 
 # ── Main ────────────────────────────────────────────────────
+
+# tutorial/tour don't require a git repo — handle before ensure_git_repo
+case "${1:-}" in
+  tutorial|tour) shift; cmd_tutorial; exit 0 ;;
+esac
+
 ensure_git_repo
 
 case "${1:-}" in
@@ -916,6 +1014,7 @@ case "${1:-}" in
   type|y|prefix)      shift; cmd_type "${1:-}" ;;
   copy|cp|yank)       shift; cmd_copy "${@:-}" ;;
   branch|br)          shift; cmd_branch "${@:-}" ;;
+  commit|com)         shift; cmd_commit "$@" ;;
   pr)                 shift; cmd_pr "${@:-}" ;;
   merge|mg)           shift; cmd_merge "${@:-}" ;;
   rebase|rb)          shift; cmd_rebase "${@:-}" ;;
