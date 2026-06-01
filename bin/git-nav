@@ -91,6 +91,19 @@ do_switch() {
   fi
 }
 
+bounce_switch() {
+  local target="$1" label="$2" from="$3"
+  local git_output
+  if git_output=$(git checkout "$target" 2>&1); then
+    record_switch "$target"
+    echo -e "${COLOR_GREEN}✓${COLOR_RESET} ${COLOR_BOLD}${from}${COLOR_RESET} ${COLOR_DIM}=>${COLOR_RESET} ${COLOR_BOLD}${target}${COLOR_RESET}  ${COLOR_DIM}(${label})${COLOR_RESET}"
+  else
+    echo -e "${COLOR_RED}✗ Failed to switch to ${COLOR_BOLD}${target}${COLOR_RESET}"
+    echo -e "${COLOR_DIM}${git_output}${COLOR_RESET}"
+    return 1
+  fi
+}
+
 format_branch_name() {
   local branch="$1"
   local current="$2"
@@ -365,6 +378,50 @@ cmd_back() {
   fi
 
   do_switch "$target"
+}
+
+cmd_bounce() {
+  local current
+  current=$(current_branch)
+  local hf
+  hf=$(history_file)
+
+  # 1. Check per-repo history for a valid previous branch
+  local prev=""
+  if [[ -f "$hf" ]]; then
+    while IFS= read -r branch; do
+      if [[ "$branch" != "$current" ]]; then
+        if git show-ref --verify --quiet "refs/heads/$branch" 2>/dev/null; then
+          prev="$branch"
+          break
+        fi
+      fi
+    done < "$hf"
+  fi
+
+  if [[ -n "$prev" ]]; then
+    bounce_switch "$prev" "previous" "$current"
+    return 0
+  fi
+
+  # 2. No history — count local branches
+  local branch_count
+  branch_count=$(git branch --format='%(refname:short)' | wc -l | tr -d ' ')
+
+  if [[ "$branch_count" -eq 1 ]]; then
+    echo -e "${COLOR_RED}Only one branch: ${COLOR_BOLD}${current}${COLOR_RESET}"
+    return 1
+  fi
+
+  if [[ "$branch_count" -eq 2 ]]; then
+    local other
+    other=$(git branch --format='%(refname:short)' | grep -vxF "$current")
+    bounce_switch "$other" "only branch available" "$current"
+    return 0
+  fi
+
+  # 3. 3+ branches, no history — show list
+  cmd_list
 }
 
 cmd_ticket() {
@@ -1019,6 +1076,7 @@ case "${1:-}" in
   list|l|ls)          shift; cmd_list "${1:-}" ;;
   recent|r)           cmd_recent ;;
   back|b|prev|-)      shift; cmd_back "${1:-1}" ;;
+  bounce|bo)          shift; cmd_bounce ;;
   ticket|t|jira|j)    shift; cmd_ticket "${*:-}" ;;
   type|y|prefix)      shift; cmd_type "${1:-}" ;;
   copy|cp|yank)       shift; cmd_copy "${@:-}" ;;
