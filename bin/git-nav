@@ -334,6 +334,8 @@ cmd_recent() {
 
 cmd_back() {
   local steps="${1:-1}"
+  local current
+  current=$(current_branch)
   local hf
   hf=$(history_file)
 
@@ -342,8 +344,15 @@ cmd_back() {
     return 1
   fi
 
-  local target
-  target=$(sed -n "${steps}p" "$hf")
+  local count=0 target=""
+  while IFS= read -r branch; do
+    [[ "$branch" == "$current" ]] && continue
+    count=$(( count + 1 ))
+    if [[ "$count" -eq "$steps" ]]; then
+      target="$branch"
+      break
+    fi
+  done < "$hf"
 
   if [[ -z "$target" ]]; then
     echo -e "${COLOR_RED}No branch at position $steps in history.${COLOR_RESET}"
