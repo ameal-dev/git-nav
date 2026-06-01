@@ -1008,6 +1008,7 @@ cmd_help() {
   echo -e "  ${COLOR_CYAN}git-nav list${COLOR_RESET} [filter]            List branches (sorted by recent commit)"
   echo -e "  ${COLOR_CYAN}git-nav recent${COLOR_RESET}                   Show recently visited branches"
   echo -e "  ${COLOR_CYAN}git-nav back${COLOR_RESET} [n]                 Switch to nth previous branch (default: 1)"
+  echo -e "  ${COLOR_CYAN}git-nav bounce${COLOR_RESET}                   Toggle to previous branch (smart fallback)"
   echo -e "  ${COLOR_CYAN}git-nav ticket${COLOR_RESET} <ID>              Find branch by ticket (e.g. AVEN-43)"
   echo -e "  ${COLOR_CYAN}git-nav type${COLOR_RESET} [type]              Browse by prefix (feature/bugfix/...)"
   echo ""
@@ -1048,6 +1049,7 @@ cmd_help() {
   echo -e "${COLOR_BOLD}SHELL ALIASES:${COLOR_RESET}"
   echo -e "  ${COLOR_CYAN}gn${COLOR_RESET}      git-nav (interactive)"
   echo -e "  ${COLOR_CYAN}gnb${COLOR_RESET}     git-nav branch"
+  echo -e "  ${COLOR_CYAN}gntog${COLOR_RESET}   git-nav bounce"
   echo -e "  ${COLOR_CYAN}gnc${COLOR_RESET}     git-nav copy"
   echo -e "  ${COLOR_CYAN}gncom${COLOR_RESET}   git-nav commit"
   echo -e "  ${COLOR_CYAN}gnpr${COLOR_RESET}    git-nav pr"
@@ -1076,7 +1078,7 @@ case "${1:-}" in
   list|l|ls)          shift; cmd_list "${1:-}" ;;
   recent|r)           cmd_recent ;;
   back|b|prev|-)      shift; cmd_back "${1:-1}" ;;
-  bounce|bo)          shift; cmd_bounce ;;
+  bounce|tog)         shift; cmd_bounce ;;
   ticket|t|jira|j)    shift; cmd_ticket "${*:-}" ;;
   type|y|prefix)      shift; cmd_type "${1:-}" ;;
   copy|cp|yank)       shift; cmd_copy "${@:-}" ;;

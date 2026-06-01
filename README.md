@@ -34,6 +34,7 @@ git-nav search <query>         # Fuzzy search branches
 git-nav ticket <ID>            # Find branch by ticket (e.g. AVEN-43)
 git-nav recent                 # Recently visited branches
 git-nav back [n]               # Go back to previous branch
+git-nav bounce                 # Toggle to previous branch (smart fallback)
 git-nav list [filter]          # List branches sorted by last commit
 git-nav type [type]            # Browse by prefix (feature/bugfix/...)
 ```
@@ -53,6 +54,7 @@ git-nav ticket AVEN-43          # finds and switches in one step
 # Quick navigation
 git-nav back                    # previous branch (like cd -)
 git-nav back 3                  # 3 branches ago
+git-nav bounce                  # toggle previous ↔ current
 
 # Browse by type
 git-nav type                    # shows: feature (12), bugfix (4), hotfix (1)
@@ -70,7 +72,7 @@ feature/AVEN-43-timeline-entries-are-out-of-order
   →  feature/ AVEN-43 timeline entries are out of order
 ```
 
-A history file (`~/.git-nav-history`) tracks your recent switches for `back` and `recent`.
+A history file (`.git/git-nav-history`) tracks your recent switches per-repo for `bounce`, `back`, and `recent`.
 
 ## Shell aliases
 
@@ -79,7 +81,8 @@ Add to your `.zshrc` or `.bashrc`:
 ```bash
 alias gn='git-nav'
 alias gns='git-nav search'
-alias gnb='git-nav back'
+alias gnb='git-nav branch'
+alias gntog='git-nav bounce'
 alias gnr='git-nav recent'
 alias gnt='git-nav ticket'
 ```
