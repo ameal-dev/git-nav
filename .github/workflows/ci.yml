@@ -96,3 +96,31 @@ jobs:
           $GN list < /dev/null || true
 
           echo "Functional tests passed"
+
+      - name: Functional test — bounce command
+        run: |
+          mkdir -p /tmp/test-bounce
+          cd /tmp/test-bounce
+          git init -q
+          git config user.email "ci@example.com"
+          git config user.name "CI"
+          git commit --allow-empty -q -m "init"
+
+          GN="bash $GITHUB_WORKSPACE/bin/git-nav"
+
+          # 1-branch: error with "Only one branch"
+          $GN bounce 2>&1 | grep -q "Only one branch" || { echo "FAIL: 1-branch error"; exit 1; }
+
+          # 2-branch: auto-switch with "(only branch available)"
+          git branch feature/hello
+          $GN bounce 2>&1 | grep -q "only branch available" || { echo "FAIL: 2-branch label"; exit 1; }
+          # Now on feature/hello, history=[feature/hello]
+
+          # Still 2-branch fallback (main not yet in history)
+          $GN bounce 2>&1 | grep -q "only branch available" || { echo "FAIL: back-to-main label"; exit 1; }
+          # Now on main, history=[main, feature/hello]
+
+          # History toggle: now feature/hello is previous, shows "(previous)"
+          $GN bounce 2>&1 | grep -q "previous" || { echo "FAIL: history label"; exit 1; }
+
+          echo "Bounce functional tests passed"
