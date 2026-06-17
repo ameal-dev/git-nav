@@ -15,8 +15,6 @@ COLOR_CYAN="\033[1;36m"
 COLOR_DIM="\033[2m"
 COLOR_RED="\033[1;31m"
 COLOR_BOLD="\033[1m"
-# shellcheck disable=SC2034  # Used in Task 2 (rich diff) and future subcommands
-COLOR_MAGENTA="\033[1;35m"
 
 # ── Helpers ─────────────────────────────────────────────────
 ensure_git_repo() {
@@ -614,10 +612,15 @@ cmd_diff() {
     return 1
   fi
 
-  # Enumerate changed files for this target.
-  local files
-  files=$(git diff --name-only "${passthrough[@]+"${passthrough[@]}"}" "${target[@]+"${target[@]}"}")
-  if [[ -z "$files" ]]; then
+  # Enumerate changed files (NUL-delimited, no path quoting) so paths with
+  # spaces, tabs, or non-ASCII characters round-trip correctly.
+  local files=()
+  while IFS= read -r -d '' f; do
+    files+=("$f")
+  done < <(git -c core.quotePath=false diff --name-only -z \
+             "${passthrough[@]+"${passthrough[@]}"}" "${target[@]+"${target[@]}"}")
+
+  if [[ ${#files[@]} -eq 0 ]]; then
     echo -e "${COLOR_DIM}No changes${COLOR_RESET}"
     return 0
   fi
@@ -635,17 +638,17 @@ cmd_diff() {
   # styled header, so the less footer only needs counters + key hints.
   local i=0
   local tmpfiles=()
-  while IFS= read -r f; do
+  local f out
+  for f in "${files[@]}"; do
     i=$((i + 1))
-    local out
     out=$(printf '%s/%02d-%s' "$tmpdir" "$i" "$(echo "$f" | tr '/' '_')")
     git diff "${passthrough[@]+"${passthrough[@]}"}" "${target[@]+"${target[@]}"}" -- "$f" \
       | delta "${delta_args[@]}" > "$out"
     tmpfiles+=("$out")
-  done <<< "$files"
+  done
 
   local prompt=' file %i/%m   [:n]ext  [:p]rev  [q]uit  (scroll with arrows) '
-  less -R -P "$prompt" "${tmpfiles[@]}"
+  less -R -P "$prompt" "${tmpfiles[@]}" || true
 }
 
 cmd_log() {
