@@ -6,6 +6,7 @@ class GitNav < Formula
   license "MIT"
 
   depends_on "bash"
+  depends_on "git-delta"
 
   def install
     bin.install "bin/git-nav"
