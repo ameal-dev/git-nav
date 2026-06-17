@@ -579,7 +579,6 @@ cmd_rebase() {
 cmd_diff() {
   local query="" target_mode="head" side="" plain="" passthrough=()
 
-  # shellcheck disable=SC2034  # side consumed by Task 2 (rich delta path)
   for arg in "$@"; do
     case "$arg" in
       --staged|--cached)     target_mode="staged" ;;
@@ -608,9 +607,45 @@ cmd_diff() {
     return
   fi
 
-  # Rich path implemented in Task 2.
-  echo -e "${COLOR_DIM}(rich diff not yet implemented)${COLOR_RESET}"
-  return 0
+  # Rich path requires delta.
+  if ! command -v delta &>/dev/null; then
+    echo -e "${COLOR_RED}delta not found.${COLOR_RESET} Install with: ${COLOR_BOLD}brew install git-delta${COLOR_RESET}" >&2
+    echo -e "${COLOR_DIM}Or run: git-nav diff --plain${COLOR_RESET}" >&2
+    return 1
+  fi
+
+  # Enumerate changed files for this target.
+  local files
+  files=$(git diff --name-only "${passthrough[@]+"${passthrough[@]}"}" "${target[@]+"${target[@]}"}")
+  if [[ -z "$files" ]]; then
+    echo -e "${COLOR_DIM}No changes${COLOR_RESET}"
+    return 0
+  fi
+
+  local theme="${GIT_NAV_DIFF_THEME:-Catppuccin Macchiato}"
+  local delta_args=(--syntax-theme "$theme" --line-numbers --paging=never)
+  [[ -n "$side" ]] && delta_args+=(--side-by-side)
+
+  local tmpdir
+  tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/git-nav-diff.XXXXXX")
+  trap 'rm -rf "$tmpdir"' EXIT
+
+  # Render each file's diff through delta into a numbered temp file so
+  # less shows them in a stable order. delta prints the file path as a
+  # styled header, so the less footer only needs counters + key hints.
+  local i=0
+  local tmpfiles=()
+  while IFS= read -r f; do
+    i=$((i + 1))
+    local out
+    out=$(printf '%s/%02d-%s' "$tmpdir" "$i" "$(echo "$f" | tr '/' '_')")
+    git diff "${passthrough[@]+"${passthrough[@]}"}" "${target[@]+"${target[@]}"}" -- "$f" \
+      | delta "${delta_args[@]}" > "$out"
+    tmpfiles+=("$out")
+  done <<< "$files"
+
+  local prompt=' file %i/%m   [:n]ext  [:p]rev  [q]uit  (scroll with arrows) '
+  less -R -P "$prompt" "${tmpfiles[@]}"
 }
 
 cmd_log() {
