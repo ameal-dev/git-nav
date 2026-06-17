@@ -15,6 +15,7 @@ COLOR_CYAN="\033[1;36m"
 COLOR_DIM="\033[2m"
 COLOR_RED="\033[1;31m"
 COLOR_BOLD="\033[1m"
+# shellcheck disable=SC2034  # Used in Task 2 (rich diff) and future subcommands
 COLOR_MAGENTA="\033[1;35m"
 
 # ── Helpers ─────────────────────────────────────────────────
@@ -576,26 +577,40 @@ cmd_rebase() {
 }
 
 cmd_diff() {
-  local git_args=()
-  local query=""
+  local query="" target_mode="head" side="" plain="" passthrough=()
 
+  # shellcheck disable=SC2034  # side consumed by Task 2 (rich delta path)
   for arg in "$@"; do
-    if [[ "$arg" == --* ]]; then
-      git_args+=("$arg")
-    else
-      query="$arg"
-    fi
+    case "$arg" in
+      --staged|--cached)     target_mode="staged" ;;
+      --side|--side-by-side) side="1" ;;
+      --plain)               plain="1" ;;
+      --*)                   passthrough+=("$arg") ;;
+      *)                     query="$arg" ;;
+    esac
   done
 
-  if [[ -z "$query" ]]; then
-    echo -e "${COLOR_RED}Usage: git-nav diff [--stat] <query>${COLOR_RESET}"
-    return 1
+  # Resolve the diff target into git-diff arguments.
+  local target=()
+  if [[ "$target_mode" == "staged" ]]; then
+    target=(--staged)
+  elif [[ -n "$query" ]]; then
+    local branch
+    branch=$(pick_branch "$query") || return 1
+    target=("$branch")
+  else
+    target=(HEAD)
   fi
 
-  local branch
-  branch=$(pick_branch "$query") || return 1
+  # --plain: raw git diff, no delta/less.
+  if [[ -n "$plain" ]]; then
+    git diff "${passthrough[@]+"${passthrough[@]}"}" "${target[@]+"${target[@]}"}"
+    return
+  fi
 
-  git diff "${git_args[@]}" "$branch"
+  # Rich path implemented in Task 2.
+  echo -e "${COLOR_DIM}(rich diff not yet implemented)${COLOR_RESET}"
+  return 0
 }
 
 cmd_log() {
