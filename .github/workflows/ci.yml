@@ -124,3 +124,36 @@ jobs:
           $GN bounce 2>&1 | grep -q "previous" || { echo "FAIL: history label"; exit 1; }
 
           echo "Bounce functional tests passed"
+
+      - name: Functional test — diff command
+        run: |
+          mkdir -p /tmp/test-diff
+          cd /tmp/test-diff
+          git init -q
+          git config user.email "ci@example.com"
+          git config user.name "CI"
+          printf 'line one\nline two\n' > file.txt
+          git add file.txt
+          git commit -q -m "init"
+
+          GN="bash $GITHUB_WORKSPACE/bin/git-nav"
+
+          # Make an unstaged change so we have something to diff.
+          printf 'line one CHANGED\nline two\n' > file.txt
+
+          # --plain shows the raw diff without needing delta.
+          $GN diff --plain | grep -q '+line one CHANGED' \
+            || { echo "FAIL: --plain output"; exit 1; }
+
+          # Rich path with delta absent: clear install guidance, non-zero exit.
+          if $GN diff 2>&1 | grep -q 'brew install git-delta'; then
+            echo "delta guard OK"
+          else
+            echo "FAIL: delta-missing guidance"; exit 1
+          fi
+
+          # No-changes path: discard the change, --plain prints nothing.
+          git checkout -q -- file.txt
+          [ -z "$($GN diff --plain)" ] || { echo "FAIL: no-changes plain"; exit 1; }
+
+          echo "Diff functional tests passed"
