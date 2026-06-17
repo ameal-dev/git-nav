@@ -10,6 +10,7 @@ class GitNav < Formula
 
   def install
     bin.install "bin/git-nav"
+    lib.install "lib/git-nav-tutorial.sh"
   end
 
   test do
