@@ -7,7 +7,7 @@
 set -euo pipefail
 
 # ── Config ──────────────────────────────────────────────────
-GIT_NAV_VERSION="1.2.0"
+GIT_NAV_VERSION="1.2.1"
 MAX_HISTORY=20
 COLOR_RESET="\033[0m"
 COLOR_GREEN="\033[1;32m"
