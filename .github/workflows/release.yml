@@ -44,7 +44,15 @@ jobs:
           draft: true                  # Review before publishing
           generate_release_notes: true # Auto-populate from commits
           body: |
-            ## Install via Homebrew
+            ## Update
+
+            ```sh
+            cd git-nav && git pull && ./install.sh
+            ```
+
+            (Re-syncs the symlink and re-checks optional dependencies — safe to run any time.)
+
+            If you tapped via Homebrew (ameal-dev/git-nav only):
 
             ```sh
             brew upgrade git-nav
