@@ -1,8 +1,8 @@
 class GitNav < Formula
   desc "Smart Git branch navigator with fuzzy search, ticket lookup, and branch history"
   homepage "https://github.com/ameal-dev/git-nav"
-  url "https://github.com/ameal-dev/git-nav/archive/refs/tags/v1.1.0.tar.gz"
-  sha256 "bd63d9fed93480baf3eea78fdadd545fe55577af89458bf66cadb8fcf61330e2"
+  url "https://github.com/ameal-dev/git-nav/archive/refs/tags/v1.2.0.tar.gz"
+  sha256 "1a58383063a82e4b910c7afe39c1621cdca9bbdb4af656ef4d5d5a4de51744aa"
   license "MIT"
 
   depends_on "bash"
@@ -14,6 +14,6 @@ class GitNav < Formula
   end
 
   test do
-    assert_match "git-nav 1.1.0", shell_output("#{bin}/git-nav --version")
+    assert_match "git-nav 1.2.0", shell_output("#{bin}/git-nav --version")
   end
 end
