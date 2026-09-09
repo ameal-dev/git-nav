@@ -1027,6 +1027,14 @@ cmd_hook() {
         return 1
       fi
 
+      # Bake in the absolute path of the git-nav that installed this hook,
+      # so it still works if `git-nav` isn't on PATH (e.g. run straight
+      # from a clone, or in a test environment) — but prefer a PATH
+      # lookup at hook-run time in case git-nav was since reinstalled
+      # elsewhere.
+      local self_path
+      self_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+
       mkdir -p "$(dirname "$hook_path")"
       cat > "$hook_path" <<HOOK
 #!/usr/bin/env bash
@@ -1035,7 +1043,11 @@ cmd_hook() {
 # Installed by: git-nav hook install
 # Remove with:  git-nav hook uninstall
 [ "\$3" = "1" ] || exit 0
-command -v git-nav >/dev/null 2>&1 && git-nav _record-checkout
+if command -v git-nav >/dev/null 2>&1; then
+  git-nav _record-checkout
+else
+  bash "$self_path" _record-checkout
+fi
 exit 0
 HOOK
       chmod +x "$hook_path"
