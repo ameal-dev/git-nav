@@ -7,7 +7,7 @@
 set -euo pipefail
 
 # ── Config ──────────────────────────────────────────────────
-GIT_NAV_VERSION="1.1.0"
+GIT_NAV_VERSION="1.2.0"
 MAX_HISTORY=20
 COLOR_RESET="\033[0m"
 COLOR_GREEN="\033[1;32m"
@@ -1008,6 +1008,74 @@ cmd_pr() {
   echo -e "  ${COLOR_CYAN}${url}${COLOR_RESET}"
 }
 
+# Marker used to tell a hook we installed apart from one that predates
+# git-nav (or belongs to another tool) — never overwrite the latter.
+HOOK_MARKER="git-nav-managed-hook"
+
+cmd_hook() {
+  local subcommand="${1:-}"
+  local hook_path
+  hook_path=$(git rev-parse --git-path hooks/post-checkout)
+
+  case "$subcommand" in
+    install)
+      if [[ -f "$hook_path" ]] && ! grep -q "$HOOK_MARKER" "$hook_path" 2>/dev/null; then
+        echo -e "${COLOR_YELLOW}A post-checkout hook already exists at ${hook_path}${COLOR_RESET}"
+        echo -e "${COLOR_DIM}It wasn't installed by git-nav, so it won't be overwritten.${COLOR_RESET}"
+        echo -e "${COLOR_DIM}Add this line to it to also track ordinary checkouts:${COLOR_RESET}"
+        echo -e "${COLOR_DIM}  [ \"\$3\" = \"1\" ] && command -v git-nav >/dev/null 2>&1 && git-nav _record-checkout${COLOR_RESET}"
+        return 1
+      fi
+
+      mkdir -p "$(dirname "$hook_path")"
+      cat > "$hook_path" <<HOOK
+#!/usr/bin/env bash
+# ${HOOK_MARKER} — records ordinary 'git checkout'/'git switch' branch
+# changes into git-nav's per-repo history (see: git-nav help).
+# Installed by: git-nav hook install
+# Remove with:  git-nav hook uninstall
+[ "\$3" = "1" ] || exit 0
+command -v git-nav >/dev/null 2>&1 && git-nav _record-checkout
+exit 0
+HOOK
+      chmod +x "$hook_path"
+      echo -e "${COLOR_GREEN}✓ Installed post-checkout hook at ${hook_path}${COLOR_RESET}"
+      echo -e "${COLOR_DIM}Plain 'git checkout'/'git switch' now update git-nav's history too.${COLOR_RESET}"
+      ;;
+
+    uninstall)
+      if [[ -f "$hook_path" ]] && grep -q "$HOOK_MARKER" "$hook_path" 2>/dev/null; then
+        rm -f "$hook_path"
+        echo -e "${COLOR_GREEN}✓ Removed ${hook_path}${COLOR_RESET}"
+      else
+        echo -e "${COLOR_YELLOW}No git-nav-managed hook found at ${hook_path}${COLOR_RESET}"
+      fi
+      ;;
+
+    status|"")
+      if [[ -f "$hook_path" ]] && grep -q "$HOOK_MARKER" "$hook_path" 2>/dev/null; then
+        echo -e "${COLOR_GREEN}✓ Installed${COLOR_RESET} — ordinary 'git checkout'/'git switch' are tracked in this repo."
+      elif [[ -f "$hook_path" ]]; then
+        echo -e "${COLOR_YELLOW}A post-checkout hook exists but isn't git-nav's — leaving it alone.${COLOR_RESET}"
+      else
+        echo -e "${COLOR_DIM}Not installed.${COLOR_RESET} Run ${COLOR_CYAN}git-nav hook install${COLOR_RESET} to also track plain 'git checkout'/'git switch' in this repo."
+      fi
+      ;;
+
+    *)
+      echo -e "${COLOR_RED}Usage: git-nav hook [install|uninstall|status]${COLOR_RESET}"
+      return 1
+      ;;
+  esac
+}
+
+# Called by the installed post-checkout hook, not by users directly.
+cmd_record_checkout() {
+  local branch
+  branch=$(git symbolic-ref --short HEAD 2>/dev/null) || return 0
+  [[ -n "$branch" ]] && record_switch "$branch"
+}
+
 cmd_interactive() {
   local current
   current=$(current_branch)
@@ -1085,6 +1153,11 @@ cmd_help() {
   echo -e "  ${COLOR_CYAN}git-nav stash${COLOR_RESET}                    Stash with branch+timestamp message"
   echo -e "  ${COLOR_CYAN}git-nav stash pop${COLOR_RESET}                Pop stash (current branch stashes shown first)"
   echo ""
+  echo -e "${COLOR_BOLD}HOOKS:${COLOR_RESET}"
+  echo -e "  ${COLOR_CYAN}git-nav hook install${COLOR_RESET}             Track plain 'git checkout'/'git switch' too (per-repo, opt-in)"
+  echo -e "  ${COLOR_CYAN}git-nav hook status${COLOR_RESET}              Show whether the hook is installed in this repo"
+  echo -e "  ${COLOR_CYAN}git-nav hook uninstall${COLOR_RESET}           Remove it"
+  echo ""
   echo -e "${COLOR_BOLD}EXAMPLES:${COLOR_RESET}"
   echo -e "  ${COLOR_DIM}git-nav branch AVEN-112 add-payment-flow       # creates feat/AVEN-112-add-payment-flow${COLOR_RESET}"
   echo -e "  ${COLOR_DIM}git-nav copy --desc                            # copies 'Add Payment Flow'${COLOR_RESET}"
@@ -1146,6 +1219,8 @@ case "${1:-}" in
   what|w)             shift; cmd_what "${@:-}" ;;
   status|st)          shift; cmd_status ;;
   stash)              shift; cmd_stash "${@:-}" ;;
+  hook|hooks)         shift; cmd_hook "${1:-}" ;;
+  _record-checkout)   cmd_record_checkout ;;
   --version|-V|version) echo "git-nav $GIT_NAV_VERSION"; exit 0 ;;
   help|h|--help|-h)   cmd_help ;;
   "")                 cmd_interactive ;;

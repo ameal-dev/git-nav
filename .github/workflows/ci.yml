@@ -188,3 +188,57 @@ jobs:
           [ -z "$($GN diff --plain)" ] || { echo "FAIL: no-changes plain"; exit 1; }
 
           echo "Diff functional tests passed"
+
+      - name: Functional test — hook install tracks plain checkouts
+        run: |
+          mkdir -p /tmp/test-hook
+          cd /tmp/test-hook
+          git init -q
+          git config user.email "ci@example.com"
+          git config user.name "CI"
+          git commit --allow-empty -q -m "init"
+
+          GN="bash $GITHUB_WORKSPACE/bin/git-nav"
+
+          $GN hook install | grep -q "Installed post-checkout hook" \
+            || { echo "FAIL: install message"; exit 1; }
+
+          hook_path=$(git rev-parse --git-path hooks/post-checkout)
+          [ -x "$hook_path" ] || { echo "FAIL: hook not executable"; exit 1; }
+
+          # Plain checkouts, no git-nav involved — the hook alone must
+          # record these into history.
+          git checkout -qb feature/A
+          git checkout -qb feature/B
+          git switch -q main 2>/dev/null || git switch -q master
+
+          hf=$(git rev-parse --git-common-dir)/git-nav-history
+          grep -qx "feature/A" "$hf" || { echo "FAIL: feature/A not recorded"; exit 1; }
+          grep -qx "feature/B" "$hf" || { echo "FAIL: feature/B not recorded"; exit 1; }
+
+          # bounce should toggle using history built entirely from plain
+          # checkouts: current is main, feature/B was visited most recently
+          # before that, so bounce should land on feature/B (not feature/A).
+          $GN bounce 2>&1 | grep -q "feature/B" \
+            || { echo "FAIL: bounce did not use plain-checkout history"; exit 1; }
+
+          # Installing again over itself is a no-op, not an overwrite.
+          $GN hook install
+          grep -q "git-nav-managed-hook" "$hook_path" \
+            || { echo "FAIL: reinstall clobbered the hook"; exit 1; }
+
+          # A hook from another tool must never be overwritten.
+          cd /tmp && rm -rf test-hook-foreign && mkdir test-hook-foreign && cd test-hook-foreign
+          git init -q
+          foreign_hook=$(git rev-parse --git-path hooks/post-checkout)
+          printf '#!/bin/sh\necho foreign\n' > "$foreign_hook"
+          chmod +x "$foreign_hook"
+          $GN hook install && { echo "FAIL: install should refuse a foreign hook"; exit 1; }
+          grep -q "foreign" "$foreign_hook" || { echo "FAIL: foreign hook was overwritten"; exit 1; }
+
+          # Uninstall removes a git-nav-managed hook cleanly.
+          cd /tmp/test-hook
+          $GN hook uninstall | grep -q "Removed" || { echo "FAIL: uninstall message"; exit 1; }
+          [ -f "$hook_path" ] && { echo "FAIL: hook file still present after uninstall"; exit 1; }
+
+          echo "Hook functional tests passed"

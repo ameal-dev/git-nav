@@ -123,7 +123,24 @@ feature/WH-6639-timeline-entries-are-out-of-order
 
 A per-repo history file (at `$(git rev-parse --git-common-dir)/git-nav-history`, typically
 `.git/git-nav-history`) tracks your recent switches for `bounce`, `back`, `recent`, and
-`status`.
+`status`. By default that history only updates when you switch *through* git-nav — a plain
+`git checkout other-branch` doesn't touch it. See **Hooks** below to track those too.
+
+## Hooks
+
+```
+git-nav hook install     Track plain 'git checkout'/'git switch' too (per-repo, opt-in)
+git-nav hook status      Show whether the hook is installed in this repo
+git-nav hook uninstall   Remove it
+```
+
+`git-nav hook install` adds a `post-checkout` git hook to the current repo, so ordinary
+`git checkout`/`git switch` — not just git-nav's own commands — get recorded into the same
+history file `bounce`, `back`, `recent`, and `status` read from. It's per-repo (run it once
+in each repo you want this in) and opt-in — install.sh doesn't do it for you.
+
+If a `post-checkout` hook already exists in the repo (from another tool), `hook install`
+leaves it alone and prints the one line to add to it by hand, rather than overwriting it.
 
 ## Configuration
 
