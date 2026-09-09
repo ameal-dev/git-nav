@@ -212,7 +212,9 @@ _tutorial_module_back() {
 
   _tutorial_pause
 
-  if _tutorial_in_git_repo && [[ -f "$HISTORY_FILE" && -s "$HISTORY_FILE" ]]; then
+  local hf
+  hf=$(history_file)
+  if _tutorial_in_git_repo && [[ -f "$hf" && -s "$hf" ]]; then
     echo -e "${COLOR_BOLD}Your branch history (most recent first):${COLOR_RESET}"
     echo ""
     local i=1
@@ -223,7 +225,7 @@ _tutorial_module_back() {
       printf "  ${COLOR_YELLOW}%2d${COLOR_RESET}  %b\n" "$i" "$formatted"
       ((i++)) || true
       [[ $i -gt 5 ]] && break
-    done < "$HISTORY_FILE"
+    done < "$hf"
     echo ""
     echo -e "  ${COLOR_DIM}gn back  →  would switch to history item #1${COLOR_RESET}"
   else
@@ -268,8 +270,10 @@ _tutorial_module_recent() {
   if _tutorial_in_git_repo; then
     local current
     current=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
+    local hf
+    hf=$(history_file)
 
-    if [[ -f "$HISTORY_FILE" && -s "$HISTORY_FILE" ]]; then
+    if [[ -f "$hf" && -s "$hf" ]]; then
       echo -e "${COLOR_BOLD}Your recent branches:${COLOR_RESET}"
       echo ""
       local i=1
@@ -280,7 +284,7 @@ _tutorial_module_recent() {
         printf "  ${COLOR_YELLOW}%2d${COLOR_RESET}  %b\n" "$i" "$formatted"
         ((i++)) || true
         [[ $i -gt 8 ]] && break
-      done < "$HISTORY_FILE"
+      done < "$hf"
     else
       echo -e "  ${COLOR_DIM}(no history yet — showing branches by commit date as a preview)${COLOR_RESET}"
       echo ""
@@ -468,9 +472,11 @@ _tutorial_module_status() {
     local current
     current=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
 
+    local hf
+    hf=$(history_file)
     local branches
-    if [[ -f "$HISTORY_FILE" && -s "$HISTORY_FILE" ]]; then
-      branches=$(head -8 "$HISTORY_FILE")
+    if [[ -f "$hf" && -s "$hf" ]]; then
+      branches=$(head -8 "$hf")
     else
       branches=$(git branch --format='%(refname:short)' --sort=-committerdate | head -6)
     fi

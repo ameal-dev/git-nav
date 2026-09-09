@@ -231,13 +231,14 @@ Expected: no errors or warnings.
 - [ ] **Step 3: Functional test for `back`**
 
 ```bash
+REPO_ROOT="$(pwd)"
 cd /tmp && rm -rf test-back && mkdir test-back && cd test-back
 git init -q && git config user.email "t@t.com" && git config user.name "T"
 git commit --allow-empty -q -m "init"
 git branch feat/one
 git branch feat/two
 
-GN="bash /Users/emil.ryden/code/tools/git-nav/bin/git-nav"
+GN="bash $REPO_ROOT/bin/git-nav"
 
 # Use search (single match → auto-switches and records history)
 $GN search one &>/dev/null   # switches to feat/one, records it
@@ -254,7 +255,7 @@ Expected: `back 1 PASS`
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /Users/emil.ryden/code/tools/git-nav
+cd <repo root>
 git add bin/git-nav
 git commit -m "fix: cmd_back skips current branch when counting steps"
 ```
@@ -349,11 +350,12 @@ Expected: no errors or warnings.
 - [ ] **Step 4: Functional test — 1-branch error**
 
 ```bash
+REPO_ROOT="$(pwd)"
 cd /tmp && rm -rf test-bounce && mkdir test-bounce && cd test-bounce
 git init -q && git config user.email "t@t.com" && git config user.name "T"
 git commit --allow-empty -q -m "init"
 
-result=$(bash /Users/emil.ryden/code/tools/git-nav/bin/git-nav bounce 2>&1)
+result=$(bash "$REPO_ROOT/bin/git-nav" bounce 2>&1)
 echo "$result" | grep -q "Only one branch" && echo "1-branch PASS" || echo "1-branch FAIL: $result"
 ```
 
@@ -365,7 +367,7 @@ Expected: `1-branch PASS`
 cd /tmp/test-bounce
 git branch feature/hello
 
-result=$(bash /Users/emil.ryden/code/tools/git-nav/bin/git-nav bounce 2>&1)
+result=$(bash "$REPO_ROOT/bin/git-nav" bounce 2>&1)
 echo "$result" | grep -q "feature/hello" && echo "2-branch PASS" || echo "2-branch FAIL: $result"
 echo "$result" | grep -q "only branch available" && echo "2-branch label PASS" || echo "2-branch label FAIL: $result"
 ```
@@ -376,7 +378,7 @@ Expected: both `PASS`
 
 ```bash
 cd /tmp/test-bounce
-GN="bash /Users/emil.ryden/code/tools/git-nav/bin/git-nav"
+GN="bash $REPO_ROOT/bin/git-nav"
 
 # State after Step 5: on feature/hello, history=[feature/hello]
 # history has no entry for main yet, so this bounce uses 2-branch fallback
@@ -396,7 +398,7 @@ Expected: all four `PASS`
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /Users/emil.ryden/code/tools/git-nav
+cd <repo root>
 git add bin/git-nav
 git commit -m "feat: add bounce command with smart toggle and per-repo history"
 ```

@@ -7,6 +7,7 @@
 set -euo pipefail
 
 # ── Config ──────────────────────────────────────────────────
+GIT_NAV_VERSION="1.1.0"
 MAX_HISTORY=20
 COLOR_RESET="\033[0m"
 COLOR_GREEN="\033[1;32m"
@@ -1102,7 +1103,6 @@ cmd_help() {
   echo -e "${COLOR_BOLD}SHELL ALIASES:${COLOR_RESET}"
   echo -e "  ${COLOR_CYAN}gn${COLOR_RESET}      git-nav (interactive)"
   echo -e "  ${COLOR_CYAN}gnb${COLOR_RESET}     git-nav branch"
-  echo -e "  ${COLOR_CYAN}gntog${COLOR_RESET}   git-nav bounce"
   echo -e "  ${COLOR_CYAN}gnc${COLOR_RESET}     git-nav copy"
   echo -e "  ${COLOR_CYAN}gncom${COLOR_RESET}   git-nav commit"
   echo -e "  ${COLOR_CYAN}gnpr${COLOR_RESET}    git-nav pr"
@@ -1146,7 +1146,7 @@ case "${1:-}" in
   what|w)             shift; cmd_what "${@:-}" ;;
   status|st)          shift; cmd_status ;;
   stash)              shift; cmd_stash "${@:-}" ;;
-  --version|-V|version) echo "git-nav 1.0.0"; exit 0 ;;
+  --version|-V|version) echo "git-nav $GIT_NAV_VERSION"; exit 0 ;;
   help|h|--help|-h)   cmd_help ;;
   "")                 cmd_interactive ;;
   *)

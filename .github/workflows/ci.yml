@@ -74,6 +74,37 @@ jobs:
       - name: Tutorial lib sources cleanly
         run: bash -c 'source lib/git-nav-tutorial.sh && echo "OK"'
 
+      # Regression test: the tutorial's history-reading modules (back,
+      # recent, status) once referenced a removed global $HISTORY_FILE
+      # and crashed with "unbound variable" under set -u the moment a
+      # per-repo history file existed. Sourcing the lib doesn't catch
+      # this — the bug only fires once the modules actually run — so
+      # drive each one with real history in place.
+      - name: Tutorial history modules run without crashing
+        run: |
+          mkdir -p /tmp/test-tutorial
+          cd /tmp/test-tutorial
+          git init -q
+          git commit --allow-empty -q -m "init"
+          git branch feature/hello
+
+          GN="bash $GITHUB_WORKSPACE/bin/git-nav"
+
+          # Populate the per-repo history file via a real switch.
+          $GN search hello
+
+          # Modules 3 (back), 4 (recent), 7 (status) all read history.
+          for m in 3 4 7; do
+            out=$(printf "$m\n\n\n\n\n0\n" | $GN tutorial 2>&1) || {
+              echo "FAIL: module $m exited non-zero"; echo "$out"; exit 1
+            }
+            echo "$out" | grep -q "unbound variable" && {
+              echo "FAIL: module $m hit unbound variable"; echo "$out"; exit 1
+            }
+          done
+
+          echo "Tutorial history modules passed"
+
       # Create a minimal git repo with real branches and verify that
       # the core navigation commands work end-to-end.
       - name: Functional test — search and list
