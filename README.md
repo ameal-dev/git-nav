@@ -61,6 +61,8 @@ Any unrecognized argument is treated as a search query, so `git-nav timeline` ju
 
 ```
 git-nav branch [type] <ticket> <desc>   Sync base, create type/TICKET-desc (type defaults to 'feat')
+git-nav worktree <name>                 One word: attach an existing branch. Several: new worktree-<slug> branch
+git-nav worktree list                   Numbered list of this repo's worktrees to switch between
 git-nav copy [query]                    Copy branch name to clipboard
 git-nav copy --ticket [query]           Copy only the ticket ID
 git-nav copy --desc [query]             Copy description, title-cased
@@ -104,6 +106,14 @@ git-nav bounce                  # toggle previous ↔ current
 git-nav branch WH-6639 timeline entries out of order
 # → syncs main, creates feature/WH-6639-timeline-entries-out-of-order
 
+# Work on something in its own worktree, and jump straight into it
+gnwt timeline entries out of order
+# → creates worktree-timeline-entries-out-of-order off main, cd's into it
+gnwt WH-6639
+# → fuzzy-matches an existing branch, creates/reuses its worktree, cd's into it
+gnwt list
+# → numbered list of this repo's worktrees; pick one to cd into it
+
 # Everyday git, with less typing
 git-nav diff --staged           # paged diff of staged changes
 git-nav pr                      # PR → main, title auto-filled from the branch name
@@ -142,6 +152,40 @@ in each repo you want this in) and opt-in — install.sh doesn't do it for you.
 If a `post-checkout` hook already exists in the repo (from another tool), `hook install`
 leaves it alone and prints the one line to add to it by hand, rather than overwriting it.
 
+## Worktrees
+
+```
+git-nav worktree <name>                 One word: attach an existing branch's worktree
+git-nav worktree <name words...>        Several words: new worktree-<slug> branch, own worktree
+git-nav worktree list                   Numbered list of this repo's worktrees to switch between
+gnwt ...                                Same, and also cd's into the resulting worktree
+```
+
+`git-nav worktree` (alias `wt`) takes a free-form name — no ticket ID or branch type needed. A
+single word fuzzy-matches an existing branch (like `search`/`merge`/`delete` do) and attaches a
+worktree to it. Multiple words are slugified and used to create a brand-new branch named
+`worktree-<slug>` off the base branch, e.g.:
+
+```bash
+gnwt dev login simplified
+# → git worktree add .claude/worktrees/dev-login-simplified -b worktree-dev-login-simplified origin/main
+```
+
+Worktrees live under `.claude/worktrees/` inside the repo, and that path is added to
+`.gitignore` the first time it's needed. This is the same location and branch-naming convention
+Claude Code's own worktree tooling already uses, so the two don't collide.
+
+Because `git-nav` runs as a separate process, it can't change your shell's working directory on
+its own — it only creates the worktree and prints its path. `gnwt` is a **shell function**
+(defined in `share/git-nav.aliases.sh`, not just an alias) that captures that path and `cd`s
+into it for you. Run `git-nav worktree`/`git-nav wt` directly if you just want the path printed.
+
+If a worktree already exists for the matched or newly-named branch, `git-nav worktree` reuses it
+instead of creating a new one.
+
+`list`/`ls` are reserved as the listing subcommand, so they can't double as a fuzzy query — an
+actual branch named `list` would need `git-nav worktree li` or similar to match it instead.
+
 ## Configuration
 
 | Variable | Default | Affects |
@@ -168,12 +212,12 @@ the single source of truth for aliases — `git-nav help` lists the same set:
 ```
 gn      git-nav (interactive)      gnrb    git-nav rebase
 gnb     git-nav branch             gnd     git-nav diff
-gnc     git-nav copy               gnl     git-nav log
-gncom   git-nav commit             gndel   git-nav delete
-gnpr    git-nav pr                 gnw     git-nav what
-gnm     git-nav merge              gns     git-nav status
-gnr     git-nav recent             gnst    git-nav stash
-                                   gnkeys  git-nav help
+gnwt    git-nav worktree + cd      gnl     git-nav log
+gnc     git-nav copy               gndel   git-nav delete
+gncom   git-nav commit             gnw     git-nav what
+gnpr    git-nav pr                 gns     git-nav status
+gnm     git-nav merge              gnst    git-nav stash
+gnr     git-nav recent             gnkeys  git-nav help
 ```
 
 ## Contributing

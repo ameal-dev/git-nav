@@ -60,6 +60,67 @@ history_file() {
   echo "$(git rev-parse --git-common-dir)/git-nav-history"
 }
 
+# The main worktree's root directory, resolved from the *common* git dir so
+# it's the same answer no matter which linked worktree you run this from.
+worktree_repo_root() {
+  local common_dir
+  common_dir=$(cd "$(git rev-parse --git-common-dir)" && pwd)
+  dirname "$common_dir"
+}
+
+worktree_slug() {
+  echo "$1" | tr '/' '-'
+}
+
+# Prints the path of the existing worktree checked out to $1 (a branch
+# name), if any — including the main worktree itself.
+worktree_path_for_branch() {
+  local branch="$1"
+  git worktree list --porcelain | awk -v want="refs/heads/${branch}" '
+    /^worktree / { path = substr($0, 10) }
+    /^branch /   { if (substr($0, 8) == want) { print path; exit } }
+  '
+}
+
+# Prints the path of the worktree checked out to $1, but only if that's a
+# *different* worktree than the one we're running in right now — 'git
+# checkout' refuses to check out a branch that's already checked out
+# elsewhere, so callers use this to fail gracefully before hitting that.
+worktree_other_path() {
+  local branch="$1"
+  local path
+  path=$(worktree_path_for_branch "$branch")
+  [[ -z "$path" ]] && return 0
+  local self
+  self=$(cd "$(git rev-parse --show-toplevel)" && pwd)
+  [[ "$path" != "$self" ]] && echo "$path"
+  return 0
+}
+
+# Emits one TAB-separated "path<TAB>branch" line per worktree of this repo
+# (branch is empty for a detached HEAD), including the main worktree.
+worktree_list_records() {
+  git worktree list --porcelain | awk '
+    /^worktree / {
+      if (path != "") print path "\t" branch
+      path = substr($0, 10); branch = ""
+    }
+    /^branch /   { branch = substr($0, 8); sub(/^refs\/heads\//, "", branch) }
+    END          { if (path != "") print path "\t" branch }
+  '
+}
+
+# Idempotently keeps .claude/worktrees/ out of the repo's tracked files.
+# Only touches that one line — never assumes the rest of .claude/ should
+# be ignored, since some repos (this one included) track other files there.
+ensure_worktree_gitignore() {
+  local repo_root="$1"
+  local gitignore="$repo_root/.gitignore"
+  grep -qxF ".claude/worktrees/" "$gitignore" 2>/dev/null && return 0
+  echo ".claude/worktrees/" >> "$gitignore"
+  echo -e "${COLOR_DIM}Added .claude/worktrees/ to .gitignore${COLOR_RESET}" >&2
+}
+
 record_switch() {
   local branch="$1"
   local hf
@@ -80,6 +141,15 @@ do_switch() {
     return 0
   fi
 
+  local other_wt
+  other_wt=$(worktree_other_path "$branch")
+  if [[ -n "$other_wt" ]]; then
+    echo -e "${COLOR_YELLOW}${COLOR_BOLD}${branch}${COLOR_RESET}${COLOR_YELLOW} is checked out in another worktree:${COLOR_RESET}"
+    echo -e "  ${COLOR_DIM}${other_wt}${COLOR_RESET}"
+    echo -e "${COLOR_DIM}Run 'gnwt list' (or 'gnwt ${branch}') to jump there instead.${COLOR_RESET}"
+    return 1
+  fi
+
   local git_output
   if git_output=$(git checkout "$branch" 2>&1); then
     record_switch "$branch"
@@ -93,6 +163,16 @@ do_switch() {
 
 bounce_switch() {
   local target="$1" label="$2" from="$3"
+
+  local other_wt
+  other_wt=$(worktree_other_path "$target")
+  if [[ -n "$other_wt" ]]; then
+    echo -e "${COLOR_YELLOW}${COLOR_BOLD}${target}${COLOR_RESET}${COLOR_YELLOW} is checked out in another worktree:${COLOR_RESET}"
+    echo -e "  ${COLOR_DIM}${other_wt}${COLOR_RESET}"
+    echo -e "${COLOR_DIM}Run 'gnwt list' (or 'gnwt ${target}') to jump there instead.${COLOR_RESET}"
+    return 1
+  fi
+
   local git_output
   if git_output=$(git checkout "$target" 2>&1); then
     record_switch "$target"
@@ -265,6 +345,12 @@ cmd_list() {
 
   echo -e "${COLOR_BOLD}Local branches:${COLOR_RESET}\n"
 
+  # Branches checked out in another worktree can't be checked out here too
+  # — flag them so picking one doesn't just fail with a raw git error.
+  local wt_records self_wt
+  wt_records=$(worktree_list_records)
+  self_wt=$(cd "$(git rev-parse --show-toplevel)" && pwd)
+
   local i=1
   while IFS= read -r branch; do
     if [[ -n "$filter" ]] && ! echo "$branch" | grep -qi "$filter"; then
@@ -278,7 +364,13 @@ cmd_list() {
     local age
     age=$(git log -1 --format='%cr' "$branch" 2>/dev/null || echo "unknown")
 
-    printf "  ${COLOR_YELLOW}%2d${COLOR_RESET}  %-60b ${COLOR_DIM}%s${COLOR_RESET}\n" "$i" "$formatted" "$age"
+    local wt_path wt_note=""
+    wt_path=$(echo "$wt_records" | awk -F'\t' -v b="$branch" '$2 == b { print $1; exit }')
+    if [[ -n "$wt_path" && "$wt_path" != "$self_wt" ]]; then
+      wt_note="  ${COLOR_DIM}(in worktree — gnwt list)${COLOR_RESET}"
+    fi
+
+    printf "  ${COLOR_YELLOW}%2d${COLOR_RESET}  %-60b ${COLOR_DIM}%s${COLOR_RESET}%b\n" "$i" "$formatted" "$age" "$wt_note"
     ((i++))
   done < <(git branch --format='%(refname:short)' --sort=-committerdate)
 
@@ -737,6 +829,152 @@ cmd_branch() {
   echo -e "${COLOR_GREEN}✓ Created and switched to ${COLOR_BOLD}${branch_name}${COLOR_RESET}"
 }
 
+cmd_worktree_list() {
+  local repo_root
+  repo_root=$(worktree_repo_root)
+
+  local current_path
+  current_path=$(cd "$(git rev-parse --show-toplevel)" && pwd)
+
+  local records
+  records=$(worktree_list_records)
+
+  if [[ -z "$records" ]]; then
+    echo -e "${COLOR_YELLOW}No worktrees found.${COLOR_RESET}" >&2
+    return 0
+  fi
+
+  echo -e "${COLOR_BOLD}Worktrees:${COLOR_RESET}\n" >&2
+
+  local i=1 paths=()
+  while IFS=$'\t' read -r path branch; do
+    paths+=("$path")
+
+    local display_branch
+    if [[ -n "$branch" ]]; then
+      display_branch=$(format_branch_name "$branch" "")
+    else
+      display_branch="${COLOR_DIM}(detached HEAD)${COLOR_RESET}"
+    fi
+
+    local marker=""
+    [[ "$path" == "$current_path" ]] && marker="${COLOR_GREEN}● ${COLOR_RESET}"
+
+    local rel="$path"
+    if [[ "$path" == "$repo_root" ]]; then
+      rel="."
+    elif [[ "$path" == "$repo_root"/* ]]; then
+      rel="${path#"$repo_root"/}"
+    fi
+
+    printf "  ${COLOR_YELLOW}%2d${COLOR_RESET}  ${marker}%-45b ${COLOR_DIM}%s${COLOR_RESET}\n" "$i" "$display_branch" "$rel" >&2
+    ((i++))
+  done <<< "$records"
+
+  echo "" >&2
+  echo -ne "${COLOR_DIM}Switch to worktree #: ${COLOR_RESET}" >&2
+  read -r choice
+
+  if [[ "$choice" =~ ^[0-9]+$ ]]; then
+    local idx=$((choice - 1))
+    if [[ $idx -ge 0 && $idx -lt ${#paths[@]} ]]; then
+      echo "${paths[$idx]}"
+      return 0
+    fi
+    echo -e "${COLOR_RED}Invalid selection.${COLOR_RESET}" >&2
+    return 1
+  fi
+
+  echo -e "${COLOR_DIM}No selection made.${COLOR_RESET}" >&2
+  return 1
+}
+
+cmd_worktree() {
+  if [[ "${1:-}" == "list" || "${1:-}" == "ls" ]]; then
+    cmd_worktree_list
+    return $?
+  fi
+
+  # Note: the dispatcher calls this as cmd_worktree "${@:-}", which (unlike
+  # plain "$@") turns zero real arguments into one empty-string argument —
+  # so "no args" must be detected via -z "$1", not $# -eq 0.
+  if [[ -z "${1:-}" ]]; then
+    echo -e "${COLOR_RED}Usage: git-nav worktree <name>${COLOR_RESET}" >&2
+    echo -e "${COLOR_DIM}  One word that matches an existing branch attaches a worktree to it.${COLOR_RESET}" >&2
+    echo -e "${COLOR_DIM}  Multiple words create a new 'worktree-<slug>' branch off the base branch.${COLOR_RESET}" >&2
+    echo -e "${COLOR_DIM}  e.g. git-nav worktree aven43                 (fuzzy-match an existing branch)${COLOR_RESET}" >&2
+    echo -e "${COLOR_DIM}       git-nav worktree dev login simplified   (new worktree-dev-login-simplified)${COLOR_RESET}" >&2
+    echo -e "${COLOR_DIM}       git-nav worktree list                  (numbered list of this repo's worktrees)${COLOR_RESET}" >&2
+    echo -e "${COLOR_DIM}  Prints the chosen worktree's path on stdout — use 'gnwt' to also cd into it.${COLOR_RESET}" >&2
+    return 1
+  fi
+
+  local branch dir_name
+  if [[ -z "${2:-}" ]]; then
+    branch=$(pick_branch "$1") || return 1
+    dir_name=$(worktree_slug "$branch")
+  else
+    local slug
+    slug=$(echo "$*" | tr '[:upper:]' '[:lower:]' | tr ' _' '-' | sed 's/[^a-z0-9-]//g' | sed 's/--*/-/g')
+    if [[ -z "$slug" ]]; then
+      echo -e "${COLOR_RED}Usage: git-nav worktree <name>${COLOR_RESET}" >&2
+      return 1
+    fi
+    branch="worktree-${slug}"
+    dir_name="$slug"
+  fi
+
+  local repo_root wt_root
+  repo_root=$(worktree_repo_root)
+  wt_root="$repo_root/.claude/worktrees"
+
+  local existing
+  existing=$(worktree_path_for_branch "$branch")
+  if [[ -n "$existing" ]]; then
+    echo -e "${COLOR_GREEN}✓${COLOR_RESET} ${COLOR_BOLD}${branch}${COLOR_RESET} already has a worktree" >&2
+    echo "$existing"
+    return 0
+  fi
+
+  ensure_worktree_gitignore "$repo_root"
+  mkdir -p "$wt_root"
+
+  local dest
+  dest="$wt_root/$dir_name"
+
+  if [[ -e "$dest" ]]; then
+    echo -e "${COLOR_RED}✗ ${dest} already exists but isn't a registered worktree for ${branch}.${COLOR_RESET}" >&2
+    return 1
+  fi
+
+  local wt_output="" wt_failed=""
+  if git show-ref --verify --quiet "refs/heads/$branch"; then
+    echo -e "${COLOR_CYAN}Creating worktree for ${COLOR_BOLD}${branch}${COLOR_RESET}${COLOR_CYAN}...${COLOR_RESET}" >&2
+    wt_output=$(git worktree add "$dest" "$branch" 2>&1) || wt_failed=1
+  elif git show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+    echo -e "${COLOR_CYAN}Creating worktree for ${COLOR_BOLD}${branch}${COLOR_RESET}${COLOR_CYAN} (tracking origin/${branch})...${COLOR_RESET}" >&2
+    wt_output=$(git worktree add -b "$branch" "$dest" "origin/$branch" 2>&1) || wt_failed=1
+  else
+    local base start_point
+    base=$(detect_base_branch)
+    git fetch origin "$base" &>/dev/null || true
+    start_point="$base"
+    git show-ref --verify --quiet "refs/remotes/origin/$base" && start_point="origin/$base"
+    echo -e "${COLOR_CYAN}Creating ${COLOR_BOLD}${branch}${COLOR_RESET}${COLOR_CYAN} from ${start_point} in a new worktree...${COLOR_RESET}" >&2
+    wt_output=$(git worktree add -b "$branch" "$dest" "$start_point" 2>&1) || wt_failed=1
+  fi
+
+  if [[ -n "$wt_failed" ]]; then
+    echo -e "${COLOR_RED}✗ Failed to create worktree for ${COLOR_BOLD}${branch}${COLOR_RESET}" >&2
+    echo -e "${COLOR_DIM}${wt_output}${COLOR_RESET}" >&2
+    return 1
+  fi
+
+  record_switch "$branch"
+  echo -e "${COLOR_GREEN}✓ Worktree ready:${COLOR_RESET} ${COLOR_BOLD}${dest}${COLOR_RESET}" >&2
+  echo "$dest"
+}
+
 cmd_what() {
   local query="${1:-}"
 
@@ -1148,6 +1386,8 @@ cmd_help() {
   echo ""
   echo -e "${COLOR_BOLD}BRANCH OPERATIONS:${COLOR_RESET}"
   echo -e "  ${COLOR_CYAN}git-nav branch${COLOR_RESET} [type] <ticket> <desc>  Create branch, syncs base first (type defaults to 'feat')"
+  echo -e "  ${COLOR_CYAN}git-nav worktree${COLOR_RESET} <name>          One word: attach an existing branch. Several: new worktree-<slug> branch"
+  echo -e "  ${COLOR_CYAN}git-nav worktree list${COLOR_RESET}            Numbered list of this repo's worktrees to switch between"
   echo -e "  ${COLOR_CYAN}git-nav copy${COLOR_RESET} [query]             Copy branch name to clipboard"
   echo -e "  ${COLOR_CYAN}git-nav copy --ticket${COLOR_RESET} [query]    Copy only the ticket ID (e.g. AVEN-43)"
   echo -e "  ${COLOR_CYAN}git-nav copy --desc${COLOR_RESET} [query]      Copy description, title-cased (e.g. 'Add Payment Flow')"
@@ -1172,6 +1412,9 @@ cmd_help() {
   echo ""
   echo -e "${COLOR_BOLD}EXAMPLES:${COLOR_RESET}"
   echo -e "  ${COLOR_DIM}git-nav branch AVEN-112 add-payment-flow       # creates feat/AVEN-112-add-payment-flow${COLOR_RESET}"
+  echo -e "  ${COLOR_DIM}gnwt dev login simplified                      # new worktree-dev-login-simplified, cd's into it${COLOR_RESET}"
+  echo -e "  ${COLOR_DIM}gnwt aven43                                    # existing branch's worktree, cd's into it${COLOR_RESET}"
+  echo -e "  ${COLOR_DIM}gnwt list                                      # pick a worktree from a numbered list, cd's into it${COLOR_RESET}"
   echo -e "  ${COLOR_DIM}git-nav copy --desc                            # copies 'Add Payment Flow'${COLOR_RESET}"
   echo -e "  ${COLOR_DIM}git-nav commit 'fix typo'                      # git commit -am 'fix typo'${COLOR_RESET}"
   echo -e "  ${COLOR_DIM}git-nav commit -t 'fix typo'                   # git commit -am 'AVEN-111: fix typo'${COLOR_RESET}"
@@ -1188,6 +1431,7 @@ cmd_help() {
   echo -e "${COLOR_BOLD}SHELL ALIASES:${COLOR_RESET}"
   echo -e "  ${COLOR_CYAN}gn${COLOR_RESET}      git-nav (interactive)"
   echo -e "  ${COLOR_CYAN}gnb${COLOR_RESET}     git-nav branch"
+  echo -e "  ${COLOR_CYAN}gnwt${COLOR_RESET}    git-nav worktree, then cd into it (shell function, not just an alias)"
   echo -e "  ${COLOR_CYAN}gnc${COLOR_RESET}     git-nav copy"
   echo -e "  ${COLOR_CYAN}gncom${COLOR_RESET}   git-nav commit"
   echo -e "  ${COLOR_CYAN}gnpr${COLOR_RESET}    git-nav pr"
@@ -1221,6 +1465,7 @@ case "${1:-}" in
   type|y|prefix)      shift; cmd_type "${1:-}" ;;
   copy|cp|yank)       shift; cmd_copy "${@:-}" ;;
   branch|br)          shift; cmd_branch "${@:-}" ;;
+  worktree|wt)        shift; cmd_worktree "${@:-}" ;;
   commit|com)         shift; cmd_commit "$@" ;;
   pr)                 shift; cmd_pr "${@:-}" ;;
   merge|mg)           shift; cmd_merge "${@:-}" ;;

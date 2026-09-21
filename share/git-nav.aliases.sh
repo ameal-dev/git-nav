@@ -11,6 +11,16 @@
 
 alias gn='git-nav'          # interactive mode
 alias gnb='git-nav branch'
+
+# git-nav worktree only creates the worktree and prints its path — an
+# external binary can't change your shell's directory. gnwt is a function
+# (not an alias) so it can capture that path and cd into it for you.
+gnwt() {
+  local dir
+  dir=$(git-nav worktree "$@") || return $?
+  [[ -n "$dir" ]] && cd "$dir"
+}
+
 alias gnc='git-nav copy'
 alias gncom='git-nav commit'
 alias gnpr='git-nav pr'
