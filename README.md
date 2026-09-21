@@ -61,7 +61,7 @@ Any unrecognized argument is treated as a search query, so `git-nav timeline` ju
 
 ```
 git-nav branch [type] <ticket> <desc>   Sync base, create type/TICKET-desc (type defaults to 'feat')
-git-nav worktree <name>                 One word: attach an existing branch. Several: new worktree-<slug> branch
+git-nav worktree <name>                 Attach an existing matching branch, or create new worktree-<slug>
 git-nav worktree list                   Numbered list of this repo's worktrees to switch between
 git-nav copy [query]                    Copy branch name to clipboard
 git-nav copy --ticket [query]           Copy only the ticket ID
@@ -155,19 +155,20 @@ leaves it alone and prints the one line to add to it by hand, rather than overwr
 ## Worktrees
 
 ```
-git-nav worktree <name>                 One word: attach an existing branch's worktree
-git-nav worktree <name words...>        Several words: new worktree-<slug> branch, own worktree
+git-nav worktree <name>                 Attach an existing matching branch, or create new worktree-<slug>
 git-nav worktree list                   Numbered list of this repo's worktrees to switch between
 gnwt ...                                Same, and also cd's into the resulting worktree
 ```
 
-`git-nav worktree` (alias `wt`) takes a free-form name — no ticket ID or branch type needed. A
-single word fuzzy-matches an existing branch (like `search`/`merge`/`delete` do) and attaches a
-worktree to it. Multiple words are slugified and used to create a brand-new branch named
-`worktree-<slug>` off the base branch, e.g.:
+`git-nav worktree` (alias `wt`) takes a free-form name — no ticket ID or branch type needed. If
+the name (fuzzy-)matches an existing branch, like `search`/`merge`/`delete` do, it attaches a
+worktree to that branch. Otherwise it's slugified and used to create a brand-new branch named
+`worktree-<slug>` off the base branch — this applies whether you give it one word or several:
 
 ```bash
-gnwt dev login simplified
+gnwt ingredient-picker      # no matching branch → new worktree-ingredient-picker
+gnwt dev login simplified   # no matching branch → new worktree-dev-login-simplified
+gnwt aven43                 # matches feat/AVEN-43-... → attaches to that branch instead
 # → git worktree add .claude/worktrees/dev-login-simplified -b worktree-dev-login-simplified origin/main
 ```
 

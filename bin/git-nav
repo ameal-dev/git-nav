@@ -60,12 +60,13 @@ history_file() {
   echo "$(git rev-parse --git-common-dir)/git-nav-history"
 }
 
-# The main worktree's root directory, resolved from the *common* git dir so
-# it's the same answer no matter which linked worktree you run this from.
+# The main worktree's root directory — the same answer no matter which
+# linked worktree you run this from. Reads it from 'git worktree list'
+# (always first in its output) rather than resolving git-common-dir
+# ourselves, so it's guaranteed to match the paths the other worktree_*
+# helpers below compare against (git may resolve symlinks differently).
 worktree_repo_root() {
-  local common_dir
-  common_dir=$(cd "$(git rev-parse --git-common-dir)" && pwd)
-  dirname "$common_dir"
+  git worktree list --porcelain | awk '/^worktree / { print substr($0, 10); exit }'
 }
 
 worktree_slug() {
@@ -900,20 +901,41 @@ cmd_worktree() {
   # so "no args" must be detected via -z "$1", not $# -eq 0.
   if [[ -z "${1:-}" ]]; then
     echo -e "${COLOR_RED}Usage: git-nav worktree <name>${COLOR_RESET}" >&2
-    echo -e "${COLOR_DIM}  One word that matches an existing branch attaches a worktree to it.${COLOR_RESET}" >&2
-    echo -e "${COLOR_DIM}  Multiple words create a new 'worktree-<slug>' branch off the base branch.${COLOR_RESET}" >&2
-    echo -e "${COLOR_DIM}  e.g. git-nav worktree aven43                 (fuzzy-match an existing branch)${COLOR_RESET}" >&2
+    echo -e "${COLOR_DIM}  If the name matches an existing branch, attaches a worktree to it.${COLOR_RESET}" >&2
+    echo -e "${COLOR_DIM}  Otherwise creates a new 'worktree-<slug>' branch off the base branch.${COLOR_RESET}" >&2
+    echo -e "${COLOR_DIM}  e.g. git-nav worktree aven43                 (matches an existing branch)${COLOR_RESET}" >&2
+    echo -e "${COLOR_DIM}       git-nav worktree ingredient-picker      (new worktree-ingredient-picker)${COLOR_RESET}" >&2
     echo -e "${COLOR_DIM}       git-nav worktree dev login simplified   (new worktree-dev-login-simplified)${COLOR_RESET}" >&2
     echo -e "${COLOR_DIM}       git-nav worktree list                  (numbered list of this repo's worktrees)${COLOR_RESET}" >&2
     echo -e "${COLOR_DIM}  Prints the chosen worktree's path on stdout — use 'gnwt' to also cd into it.${COLOR_RESET}" >&2
     return 1
   fi
 
-  local branch dir_name
+  local branch="" dir_name=""
+
   if [[ -z "${2:-}" ]]; then
-    branch=$(pick_branch "$1") || return 1
-    dir_name=$(worktree_slug "$branch")
-  else
+    # Single word — attach to an existing branch if one fuzzy-matches;
+    # otherwise fall through below and create a new one named after it.
+    local fuzzy_pattern="" i char
+    for (( i=0; i<${#1}; i++ )); do
+      char="${1:$i:1}"
+      char=$(printf '%s' "$char" | sed 's/[][\\.^$*+?{}()|]/\\&/g')
+      fuzzy_pattern+="${char}.*"
+    done
+    fuzzy_pattern="${fuzzy_pattern%.\*}"
+
+    local candidates
+    candidates=$(git branch --all --format='%(refname:short)' | \
+      sed 's|^origin/||' | sort -u | \
+      grep -iE "$fuzzy_pattern" 2>/dev/null || true)
+
+    if [[ -n "$candidates" ]]; then
+      branch=$(pick_branch "$1") || return 1
+      dir_name=$(worktree_slug "$branch")
+    fi
+  fi
+
+  if [[ -z "$branch" ]]; then
     local slug
     slug=$(echo "$*" | tr '[:upper:]' '[:lower:]' | tr ' _' '-' | sed 's/[^a-z0-9-]//g' | sed 's/--*/-/g')
     if [[ -z "$slug" ]]; then
@@ -1386,7 +1408,7 @@ cmd_help() {
   echo ""
   echo -e "${COLOR_BOLD}BRANCH OPERATIONS:${COLOR_RESET}"
   echo -e "  ${COLOR_CYAN}git-nav branch${COLOR_RESET} [type] <ticket> <desc>  Create branch, syncs base first (type defaults to 'feat')"
-  echo -e "  ${COLOR_CYAN}git-nav worktree${COLOR_RESET} <name>          One word: attach an existing branch. Several: new worktree-<slug> branch"
+  echo -e "  ${COLOR_CYAN}git-nav worktree${COLOR_RESET} <name>          Attach an existing matching branch, or create new worktree-<slug>"
   echo -e "  ${COLOR_CYAN}git-nav worktree list${COLOR_RESET}            Numbered list of this repo's worktrees to switch between"
   echo -e "  ${COLOR_CYAN}git-nav copy${COLOR_RESET} [query]             Copy branch name to clipboard"
   echo -e "  ${COLOR_CYAN}git-nav copy --ticket${COLOR_RESET} [query]    Copy only the ticket ID (e.g. AVEN-43)"
